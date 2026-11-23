@@ -49,6 +49,9 @@ Metrics below are from the locked evaluation ledger (`v3.8` spec / `v4.0` releas
 | Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | **0.720** | — | 0.714 (`--parc`) | 0.824 |
 | EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | **0.794** | 0.684 | 0.009 | 0.792 | 0.811 |
 | OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | **2.26%** | 2.66% | — | 3.38% |
+| Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | **0.636** | **0.649** | **0.627** | 0.621 | 0.397 |
+| Severe Acquisition Noise (10% head-masked noise, Mindboggle `N=20`, Shared-11 Dice) | **0.819** | **0.808** | **0.813** | 0.784 | 0.796 |
+| Same-Laptop Apple M1 (16 GB) Runtime & Peak Memory *(WebGPU vs CPU / MPS)* | **3.8 s** (1.6 GiB) | **3.9 s** (1.6 GiB) | **2.3 s** (1.3 GiB) | 656 s (16.7 GiB) | 311 s (8.4 GiB) |
 
 **Known limitations:**
 - **Thick-slice clinical scans (5 mm):** SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`) outperform isotropic-trained BrainChop (`0.734–0.739`) on heavily anisotropic 5 mm acquisitions.

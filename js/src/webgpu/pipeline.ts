@@ -876,7 +876,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   const conformedImg = conformed.img as Uint8Array
   reportProgress('conform', 0.25)
 
-  // 3. Quantile normalization (0.05..0.95) + intensity copy for CAT-lite fit
+  // 3. Quantile normalization (0.05..0.95) + intensity copy for PVE fit
   reportProgress('preprocess', 0.25, { message: 'Computing intensity quantiles' })
   const { qmin, qmax } = computeQuantiles(conformedImg, 0.05, 0.95)
   const normOffset = qmin

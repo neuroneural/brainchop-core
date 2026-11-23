@@ -306,7 +306,7 @@ function gaussianLogLikelihood(value, mean, sigma, logSigma) {
 }
 
 /**
- * Return CAT-lite [GM, WM, CSF] fractions (`tissues`) in native voxel order.
+ * Return partial-volume [GM, WM, CSF] fractions (`tissues`) in native voxel order.
  * `volumes` must be [GM, WM, CSF] model probabilities in the same orientation
  * as `intensity`; they are modified in place by support cleanup.
  */
@@ -486,7 +486,7 @@ const formatTissues = ({ csf, gray, white }) =>
   `CSF=${csf.toFixed(3)} GM=${gray.toFixed(3)} WM=${white.toFixed(3)}`;
 
 /**
- * Backend-shared CAT-lite tail. `priors` are the runner's [GM, WM, CSF] maps in
+ * Backend-shared partial-volume tail. `priors` are the runner's [GM, WM, CSF] maps in
  * model order; `toNative(prior, tissueIndex)` returns one in native voxel order.
  * Fills `statData` and returns the [GM, WM, CSF] maps to display.
  */

@@ -1118,11 +1118,11 @@ test-wasm: wasm | $(BC_TMP)
 	python3 -c 'import gzip,pathlib; pathlib.Path("$(BC_TMP)/bc-w-t1crop.nii").write_bytes(gzip.open("$(TEST_IN)","rb").read())'
 	python3 -c 'import gzip,pathlib; pathlib.Path("$(BC_TMP)/bc-w-t12mm.nii").write_bytes(gzip.open("$(TEST_2MM)","rb").read())'
 	node ../test/wasm_run.mjs $(WASM_DIR)/$(exe_mindgrab).js $(BC_TMP)/bc-w-t1crop.nii $(BC_TMP)/bc-w-mg.nii
-	python3 -c 'import gzip,pathlib,sys; sys.exit(0 if pathlib.Path("$(BC_TMP)/bc-w-mg.nii").read_bytes()==gzip.open("$(TEST_MG)","rb").read() else "wasm MindGrab differs from the native reference")'
+	python3 ../test/nii_diff.py $(TEST_MG) $(BC_TMP)/bc-w-mg.nii 0
 	node ../test/wasm_run.mjs $(WASM_DIR)/$(exe_model16chan18cls).js $(BC_TMP)/bc-w-t1crop.nii $(BC_TMP)/bc-w-m16c.nii --save-conform
-	python3 -c 'import gzip,pathlib,sys; sys.exit(0 if pathlib.Path("$(BC_TMP)/bc-w-m16c.nii").read_bytes()==gzip.open("$(TEST_M16)","rb").read() else "wasm --save-conform differs from the native reference")'
+	python3 ../test/nii_diff.py $(TEST_M16) $(BC_TMP)/bc-w-m16c.nii 0
 	node ../test/wasm_run.mjs $(WASM_DIR)/$(exe_model16chan18cls).js $(BC_TMP)/bc-w-t12mm.nii $(BC_TMP)/bc-w-m16n.nii
-	python3 -c 'import gzip,pathlib,sys; sys.exit(0 if pathlib.Path("$(BC_TMP)/bc-w-m16n.nii").read_bytes()==gzip.open("$(TEST_M16_NATIVE_WASM)","rb").read() else "wasm native-space differs from the frozen wasm/browser majority reference")'
+	python3 ../test/nii_diff.py $(TEST_M16_NATIVE_WASM) $(BC_TMP)/bc-w-m16n.nii 0
 	# mindmap under node needs ~3.2 GB of heap, against wasm32's 4 GB ceiling.
 	# Bit-exact on this machine; a machine that cannot supply the heap fails at
 	# the memory growth, and nothing here checks that failure is legible.
@@ -1589,29 +1589,39 @@ refresh-fixtures: models
 # options its model supports, and refuse every option it does not.
 test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_MM_NATIVE) $(TEST_MS) $(TEST_MS_NATIVE) | $(BC_TMP)
 	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mg-test.nii.gz $(TEST_IN)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mg-test.nii.gz","rb").read() == gzip.open("$(TEST_MG)","rb").read(), "MindGrab CPU output changed"'
+	python3 ../test/nii_diff.py $(TEST_MG) $(BC_TMP)/bc-mg-test.nii.gz 0
 	./$(exe_mindgrab) -cpu 3 --no-turbo -o $(BC_TMP)/bc-mg-threads.nii.gz $(TEST_IN)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mg-threads.nii.gz","rb").read() == gzip.open("$(TEST_MG)","rb").read(), "MindGrab output depends on the thread count"'
+	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mg-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-mg-test.nii.gz","rb").read(), "MindGrab output depends on the thread count"'
 	./$(exe_model16chan18cls) -cpu 0 --no-turbo --save-conform -o $(BC_TMP)/bc-m16-conf-test.nii.gz $(TEST_IN)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-m16-conf-test.nii.gz","rb").read() == gzip.open("$(TEST_M16)","rb").read(), "--save-conform output changed"'
+	python3 ../test/nii_diff.py $(TEST_M16) $(BC_TMP)/bc-m16-conf-test.nii.gz 0
 	./$(exe_model16chan18cls) -cpu 0 --no-turbo -o $(BC_TMP)/bc-m16-native-test.nii.gz $(TEST_2MM)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-m16-native-test.nii.gz","rb").read() == gzip.open("$(TEST_M16_NATIVE)","rb").read(), "default (native-space) output changed"'
+	python3 ../test/nii_diff.py $(TEST_M16_NATIVE) $(BC_TMP)/bc-m16-native-test.nii.gz 0
 	# mindmap: the 24-channel sibling. Its fixtures are corroborated rather than
 	# self-referential -- both agreed with tinygrad to ZERO voxels, run through
 	# brainchop-cli with this model's 5/95 rank normalization substituted for
 	# the 2/98 MindGrab form that qnormalize() hardcodes.
 	./$(exe_mindmap) -cpu 0 --no-turbo --save-conform -o $(BC_TMP)/bc-mm-conf-test.nii.gz $(TEST_IN) --legacy-cleanup
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mm-conf-test.nii.gz","rb").read() == gzip.open("$(TEST_MM)","rb").read(), "mindmap --save-conform output changed"'
+	python3 ../test/nii_diff.py $(TEST_MM) $(BC_TMP)/bc-mm-conf-test.nii.gz 0
 	./$(exe_mindmap) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mm-native-test.nii.gz $(TEST_2MM) --legacy-cleanup
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mm-native-test.nii.gz","rb").read() == gzip.open("$(TEST_MM_NATIVE)","rb").read(), "mindmap native-space output changed"'
+	python3 ../test/nii_diff.py $(TEST_MM_NATIVE) $(BC_TMP)/bc-mm-native-test.nii.gz 0
 	./$(exe_mindmap) -cpu 5 --no-turbo --save-conform -o $(BC_TMP)/bc-mm-threads.nii.gz $(TEST_IN) --legacy-cleanup
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mm-threads.nii.gz","rb").read() == gzip.open("$(TEST_MM)","rb").read(), "mindmap output depends on the thread count"'
+	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mm-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-mm-conf-test.nii.gz","rb").read(), "mindmap output depends on the thread count"'
 	./$(exe_mindsnap) -cpu 0 --no-turbo --save-conform -o $(BC_TMP)/bc-ms-conf-test.nii.gz $(TEST_IN)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-conf-test.nii.gz","rb").read() == gzip.open("$(TEST_MS)","rb").read(), "mindsnap --save-conform output changed"'
+	python3 ../test/nii_diff.py $(TEST_MS) $(BC_TMP)/bc-ms-conf-test.nii.gz 0
 	./$(exe_mindsnap) -cpu 0 --no-turbo -o $(BC_TMP)/bc-ms-native-test.nii.gz $(TEST_2MM)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-native-test.nii.gz","rb").read() == gzip.open("$(TEST_MS_NATIVE)","rb").read(), "mindsnap native-space output changed"'
+	python3 ../test/nii_diff.py $(TEST_MS_NATIVE) $(BC_TMP)/bc-ms-native-test.nii.gz 0
 	./$(exe_mindsnap) -cpu 5 --no-turbo --save-conform -o $(BC_TMP)/bc-ms-threads.nii.gz $(TEST_IN)
-	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-threads.nii.gz","rb").read() == gzip.open("$(TEST_MS)","rb").read(), "mindsnap output depends on the thread count"'
+	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-ms-conf-test.nii.gz","rb").read(), "mindsnap output depends on the thread count"'
+	# Provenance stamped into NIfTI-1 descrip header across all four models.
+	python3 -c 'import sys; sys.path.insert(0, "../test"); import nii_diff; \
+		checks = [("$(BC_TMP)/bc-mg-test.nii.gz", "mindgrab cpu exact"), \
+			("$(BC_TMP)/bc-m16-conf-test.nii.gz", "mindmap-fast cpu exact"), \
+			("$(BC_TMP)/bc-mm-conf-test.nii.gz", "mindmap cpu exact"), \
+			("$(BC_TMP)/bc-ms-conf-test.nii.gz", "mindsnap cpu exact")]; \
+		bad = [(p, nii_diff.descrip(nii_diff.read(p)), t) for p, t in checks \
+			if not (nii_diff.descrip(nii_diff.read(p)).startswith("brainchop ") \
+				and nii_diff.descrip(nii_diff.read(p)).endswith(" " + t))]; \
+		assert not bad, f"unexpected NIfTI descrip provenance: {bad}"'
 	# Options a sibling executable offers must be refused, not silently ignored:
 	# a dropped flag produces a plausible file answering a different question.
 	! ./$(exe_mindgrab) -m model16chan18cls -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
@@ -1622,7 +1632,7 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	! ./$(exe_model16chan18cls) --mask $(BC_TMP)/bc-absent-mask.nii.gz -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_model16chan18cls) --border 5 -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_model16chan18cls) --pve -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
-	./$(exe_model16chan18cls) --pve $(TEST_IN) 2>&1 | grep -q "supported and validated only for MindMap"
+	./$(exe_model16chan18cls) --pve $(TEST_IN) 2>&1 | grep -q "supported only for mindmap"
 	! ./$(exe_mindsnap) --pve -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_mindsnap) --crop -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_mindgrab) --custom $(BC_TMP) -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
@@ -1733,6 +1743,14 @@ ifeq ($(METAL),1)
 	python3 ../test/nii_dice.py $(TEST_MS) $(BC_TMP)/bc-turbo-ms.nii.gz $(TURBO_GATE)
 	./$(exe_mindsnap) -backend metal -o $(BC_TMP)/bc-turbo-msn.nii.gz $(TEST_2MM)
 	python3 ../test/nii_dice.py $(TEST_MS_NATIVE) $(BC_TMP)/bc-turbo-msn.nii.gz $(TURBO_GATE)
+	python3 -c 'import sys; sys.path.insert(0, "../test"); import nii_diff; \
+		checks = [("$(BC_TMP)/bc-metal-mg.nii.gz", "mindgrab metal exact"), \
+			("$(BC_TMP)/bc-turbo-mg.nii.gz", "mindgrab metal turbo"), \
+			("$(BC_TMP)/bc-pve-metal_gm.nii.gz", "mindmap metal pve")]; \
+		bad = [(p, nii_diff.descrip(nii_diff.read(p)), t) for p, t in checks \
+			if not (nii_diff.descrip(nii_diff.read(p)).startswith("brainchop ") \
+				and nii_diff.descrip(nii_diff.read(p)).endswith(" " + t))]; \
+		assert not bad, f"unexpected Metal NIfTI descrip provenance: {bad}"'
 else
 	@echo "Metal backend is not enabled for this build"
 endif

@@ -32,7 +32,7 @@ def digest(path):
 
 def label_difference(reference, candidate):
     a, b = nii_diff.read(str(reference)), nii_diff.read(str(candidate))
-    if a[:352] != b[:352] or len(a) != len(b):
+    if not nii_diff.header_matches(a, b) or len(a) != len(b):
         raise ValueError('output geometry/datatype differs from CPU reference')
     return sum(x != y for x, y in zip(nii_diff.voxels(a, str(reference)),
                                      nii_diff.voxels(b, str(candidate))))

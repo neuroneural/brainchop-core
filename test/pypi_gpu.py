@@ -75,12 +75,12 @@ for model,refs,budgets in [('mindgrab',('bet.nii.gz',None),(64,64)),('16chan18cl
         rows.append(row); print(json.dumps(row),flush=True)
         (a.output/'results.json').write_text(json.dumps(rows,indent=2)+'\n')
 
-# Historical command defaults to model16 without a backend flag.
+# Default unified command selects mindmap without a backend flag.
 if not a.scalar and a.adapter is None:
     output=a.output/'compat-default.nii.gz'
+    direct=a.output/'compat-direct.nii.gz'
     proc=subprocess.run([str(scripts/'brainchop'),str(fixtures/'t1_crop.nii.gz'),'-o',str(output)],env=env,capture_output=True,text=True,timeout=600)
     (a.output/'compat-default.log').write_text(proc.stdout+proc.stderr)
     assert proc.returncode==0 and f'using {a.backend} backend' in proc.stderr,proc.stderr
-    # The compatibility command runs Metal's default (turbo), not --no-turbo.
-    same=a.output/('16chan18cls-0-turbo.nii.gz' if a.backend=='metal' else '16chan18cls-0-auto.nii.gz')
-    assert compare(same,output,0)==0
+    subprocess.run([str(scripts/'brainchop-mindmap'),'-o',str(direct),str(fixtures/'t1_crop.nii.gz')],env=env,capture_output=True,text=True,timeout=600,check=True)
+    assert compare(direct,output,0)==0

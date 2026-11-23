@@ -352,7 +352,7 @@ def describe_host():
 def voxel_diff(path_a, path_b):
     """Differing voxel count, or None if the two are not comparable."""
     blob_a, blob_b = nii_diff.read(path_a), nii_diff.read(path_b)
-    if blob_a[: nii_diff.HEADER_BYTES] != blob_b[: nii_diff.HEADER_BYTES]:
+    if not nii_diff.header_matches(blob_a, blob_b):
         return None
     a = nii_diff.voxels(blob_a, path_a)
     b = nii_diff.voxels(blob_b, path_b)

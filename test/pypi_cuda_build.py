@@ -13,6 +13,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+import nii_diff
+
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'packaging'))
 import brainchop_build as build
@@ -46,5 +48,7 @@ for model in build.EXES:
 output=a.output/'auto-cpu.nii.gz'
 result=subprocess.run([str(scripts/('brainchop-mindgrab'+suffix)),'--no-turbo','-o',str(output),str(ROOT/'test/t1_crop.nii.gz')],capture_output=True,text=True,env=dict(os.environ,BC_NUM_THREADS='4'),check=True)
 assert 'using cpu backend' in result.stderr,result.stderr
-assert gzip.decompress(output.read_bytes())==gzip.decompress((ROOT/'test/bet.nii.gz').read_bytes())
+actual=gzip.decompress(output.read_bytes())
+assert nii_diff.descrip(actual).startswith('brainchop '), nii_diff.descrip(actual)
+assert nii_diff.equal_ignoring_descrip(actual,gzip.decompress((ROOT/'test/bet.nii.gz').read_bytes()))
 print('PASS: simulated sm89/OpenCL selection compiled and installed without SDK headers; only sm89 images; missing CUDA refuses; CPU fallback bit-exact')

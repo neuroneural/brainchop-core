@@ -65,7 +65,7 @@ export const MODELS: Record<ModelName, ModelInfo> = {
   'mindmap-fast': {
     name: 'mindmap-fast',
     colormap: COLORMAPS['mindmap-fast'],
-    description: '18-class brain segmentation (16-channel, MindMap-Fast v3.5)',
+    description: 'fast lightweight 18-class cortical and subcortical segmentation',
     outputKind: 'labels',
     capabilities: {
       ct: true, comply: true, saveConform: true, mask: false, border: false,
@@ -74,7 +74,7 @@ export const MODELS: Record<ModelName, ModelInfo> = {
   '16chan18cls': {
     name: '16chan18cls',
     colormap: COLORMAPS['16chan18cls'],
-    description: '18-class brain segmentation (16-channel, alias for mindmap-fast)',
+    description: 'fast lightweight 18-class segmentation (alias for mindmap-fast)',
     outputKind: 'labels',
     capabilities: {
       ct: true, comply: true, saveConform: true, mask: false, border: false,
@@ -83,7 +83,7 @@ export const MODELS: Record<ModelName, ModelInfo> = {
   mindmap: {
     name: 'mindmap',
     colormap: COLORMAPS['mindmap'],
-    description: '18-class brain segmentation (24-channel, MindMap-18 v4.0 Gold)',
+    description: '18-class cortical and subcortical segmentation',
     outputKind: 'labels',
     capabilities: {
       ct: true, comply: true, saveConform: true, mask: false, border: false,
@@ -92,7 +92,7 @@ export const MODELS: Record<ModelName, ModelInfo> = {
   mindsnap: {
     name: 'mindsnap',
     colormap: COLORMAPS['mindsnap'],
-    description: '104-class Desikan-Killiany parcellation (24-channel, MindSnap-104 v4.0 Gold)',
+    description: '104-class Desikan-Killiany parcellation',
     outputKind: 'labels',
     capabilities: {
       ct: true, comply: true, saveConform: true, mask: false, border: false,

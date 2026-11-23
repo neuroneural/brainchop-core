@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sysconfig
 import brainchop_cli
+import nii_diff
 p=argparse.ArgumentParser(); p.add_argument('--output',type=Path,required=True); a=p.parse_args()
 a.output=a.output.resolve(); a.output.mkdir(parents=True,exist_ok=False)
 scripts=Path(sysconfig.get_path('scripts')); fixtures=Path(__file__).resolve().parent
@@ -35,6 +36,8 @@ for model in ('mindgrab','16chan18cls','mindmap','mindsnap'):
     assert rc!=0 and not out.exists(),log
 rc,log,out=run('cpu-fallback','mindgrab',('--no-turbo',),hidden='no-drivers')
 assert rc==0 and 'using cpu backend' in log,log
-assert gzip.decompress(out.read_bytes())==gzip.decompress((fixtures/'bet.nii.gz').read_bytes())
+actual=gzip.decompress(out.read_bytes())
+assert nii_diff.descrip(actual).startswith('brainchop '), nii_diff.descrip(actual)
+assert nii_diff.equal_ignoring_descrip(actual,gzip.decompress((fixtures/'bet.nii.gz').read_bytes()))
 (a.output/'results.json').write_text(json.dumps(dict(opencl_built='OPENCL=1' in manifest['options'],cuda_survives_opencl_loss=True,unavailable_cuda_refuses_all_models=True,cpu_fallback_exact=True),indent=2)+'\n')
 print('PASS: CUDA survives OpenCL loss; missing CUDA refuses all four models; automatic CPU fallback exact')

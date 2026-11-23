@@ -26,7 +26,7 @@ from hip_memory import check_memory
 
 def compare(reference, candidate, limit):
     a, b = nii_diff.read(str(reference)), nii_diff.read(str(candidate))
-    assert a[:352] == b[:352], f'headers differ: {reference} {candidate}'
+    assert nii_diff.header_matches(a, b), f'headers differ: {reference} {candidate}'
     av, bv = nii_diff.voxels(a, str(reference)), nii_diff.voxels(b, str(candidate))
     assert len(av) == len(bv)
     different = sum(x != y for x, y in zip(av, bv))

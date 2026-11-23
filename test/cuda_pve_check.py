@@ -23,7 +23,7 @@ import nii_diff
 
 def compare(reference, candidate):
     a, b = nii_diff.read(str(reference)), nii_diff.read(str(candidate))
-    if a[:352] != b[:352] or len(a) != len(b):
+    if not nii_diff.header_matches(a, b) or len(a) != len(b):
         raise AssertionError('PVE NIfTI geometry, datatype or scaling differs')
     if struct.unpack_from('<h', a, 70)[0] != 2:
         raise AssertionError('PVE output must be uint8')

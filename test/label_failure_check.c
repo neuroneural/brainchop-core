@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
 		assert(!output && !cpu_calls);
 		assert(!run_model(input,DT_FLOAT32,0,&weights,&bad,1,&cli,&output));
 		assert(output && cpu_calls==1);
+		assert(strstr(output->descrip, "test-cpu") != NULL);
 		nifti_image_free(output);
 	}
 	nifti_image_free(input);

@@ -202,6 +202,14 @@ const url = (s, page = 'index.html') => `http://127.0.0.1:${s.address().port}/${
 const expected = readFileSync(resolve(expectedPath));
 let failed = 0;
 
+function niftiEqualIgnoringDescrip(actual, ref) {
+  if (!actual || actual.length !== ref.length || actual.length < 352) return false;
+  const descrip = actual.subarray(148, 228).toString('ascii').split('\0', 1)[0];
+  if (!descrip.startsWith('brainchop ')) return false;
+  return actual.subarray(0, 148).equals(ref.subarray(0, 148)) &&
+    actual.subarray(228).equals(ref.subarray(228));
+}
+
 // Printed as each case finishes rather than collected: a browser that hangs
 // should leave behind which rows already passed.
 const modes = (process.env.BC_MT_MODES ?? 'page,worker,noniso').split(',');
@@ -326,7 +334,7 @@ if (modes.includes('release')) {
   const bytes = received.get('release-page');
   // Bit-exact against the SAME fixture the gate rows use, so this control
   // cannot report a browser as healthy on a volume it got wrong.
-  const ok = Boolean(bytes) && Buffer.compare(bytes, expected) === 0;
+  const ok = niftiEqualIgnoringDescrip(bytes, expected);
   // drive()'s own record, POSTed separately. Without it this mode -- the one
   // whose whole purpose is diagnosis -- printed "NO OUTPUT" and nothing else on
   // a failure, discarding the status and the module's log.
@@ -428,7 +436,7 @@ for (const engine of [process.env.BC_TEST_BROWSER ?? 'chromium']) {
       continue;
     }
     const bytes = received.get(tag);
-    const ok = result.status === 0 && bytes && Buffer.compare(bytes, expected) === 0;
+    const ok = result.status === 0 && niftiEqualIgnoringDescrip(bytes, expected);
     if (!ok) { failed++; for (const l of result.log ?? []) console.error(`  ${tag}: ${l}`); }
     report({ tag, ok, ms: result.ran,
       note: ok ? `bit-exact, isolated=${result.isolated}, hardwareConcurrency=${result.concurrency}`

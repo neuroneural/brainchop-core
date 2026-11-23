@@ -62,9 +62,9 @@ Every binary and npm asset in this repository is built directly from the verifie
 | Model | Paper Checkpoint | Shipped `model.bin` (SHA-256) | Shipped `model.safetensors` FP16 (SHA-256) | Locked `.pth` (SHA-256) |
 | --- | --- | --- | --- | --- |
 | `mindgrab` | MindGrab (NeuroImage 2026) | `c9a01490fe2d13acc1515fd019b69db176ebe6f40c9b84aeb77f25acbc2ee0f3` | `21bf4c811a4790fa2498a49f2aa9042f9108964111b54a006fde1194b0e0e7b9` | — |
-| `mindmap` | MindMap-24 (`mm18_v40_gold`) | `58006d1951212bf33695a8f4409823e872902a6e060b21e87d3fd65c1eb7c4e5` | `b86e11e7884061b81c2ac6d253c90933a3651e0accb7657b9c90f98afcee76ef` | `f6b60026daccabc689ff56bbadd5c1141a5645529f75eb998fe58426ac7f1b48` |
-| `mindsnap` | MindSnap-104 (`ms104_v40_gold`) | `995cdb522ba941b41ba7ab61d0484e8700f6c3d6084398ce28c6ce75d1ca2a1a` | `e485cac1ffc5bfc55a9cbca848d4fdae4a99a9f06cdec7e5d55e7801b9e44540` | `6b713d9d995bcce0ad5dd6c129f022aeb0241812f5acf64610f4a43ea6544bbc` |
-| `mindmap-fast` | MindMap-16 (`mindmap_16ch_v3_5_locked`) | `22d73f439fbf4e4195adbd68f813f3c433b2d3f336d48a097ce7fb83bc5785b6` | `aa0ea2e4a4f1fdffadf0bcb957f8aa5c13efd3dc4e7f85a39df2ae8690a6748f` | `5b8aade1940ae11ddd472a5a212da2a5b7d16f3ceec4f6884bcfe99f7f1bdfe5` |
+| `mindmap` | MindMap-24 | `58006d1951212bf33695a8f4409823e872902a6e060b21e87d3fd65c1eb7c4e5` | `b86e11e7884061b81c2ac6d253c90933a3651e0accb7657b9c90f98afcee76ef` | `f6b60026daccabc689ff56bbadd5c1141a5645529f75eb998fe58426ac7f1b48` |
+| `mindsnap` | MindSnap-104 | `995cdb522ba941b41ba7ab61d0484e8700f6c3d6084398ce28c6ce75d1ca2a1a` | `e485cac1ffc5bfc55a9cbca848d4fdae4a99a9f06cdec7e5d55e7801b9e44540` | `6b713d9d995bcce0ad5dd6c129f022aeb0241812f5acf64610f4a43ea6544bbc` |
+| `mindmap-fast` | MindMap-16 | `22d73f439fbf4e4195adbd68f813f3c433b2d3f336d48a097ce7fb83bc5785b6` | `aa0ea2e4a4f1fdffadf0bcb957f8aa5c13efd3dc4e7f85a39df2ae8690a6748f` | `5b8aade1940ae11ddd472a5a212da2a5b7d16f3ceec4f6884bcfe99f7f1bdfe5` |
 
 ## Quick Install
 

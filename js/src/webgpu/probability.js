@@ -1,4 +1,4 @@
-// Shared host-side pieces for the native WebGL2 CAT-lite probability path.
+// Shared host-side pieces for the native WebGL2 tissue-probability path.
 
 const DEFAULT_GROUPS = {
   grayMatter: [2, 6, 7, 8, 9, 10, 14, 15, 16, 17],

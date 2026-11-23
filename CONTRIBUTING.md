@@ -12,7 +12,7 @@ cd brainchop-core
 make -C src -j4
 ```
 
-See [docs/building-and-testing.md](docs/building-and-testing.md) for platform-specific prerequisites (macOS Metal, Linux GCC/Clang/CUDA/HIP, Windows MSYS2 UCRT64, and Emscripten WASM).
+See [docs/building.md](docs/building.md) and [docs/testing-and-wasm.md](docs/testing-and-wasm.md) for platform-specific prerequisites (macOS Metal, Linux GCC/Clang/CUDA/HIP, Windows MSYS2 UCRT64, and Emscripten WASM).
 
 ## Running Tests
 

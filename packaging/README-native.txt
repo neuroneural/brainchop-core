@@ -5,13 +5,15 @@ the archive and run `brainchop` (unified dispatcher) or a model executable
 directly (`brainchop-mindgrab`, `brainchop-mindmap-fast`, `brainchop-mindmap`,
 or `brainchop-mindsnap`, with `.exe` on Windows):
 
+  brainchop -o labels.nii.gz input.nii.gz
   brainchop -m mindgrab -o stripped.nii.gz input.nii.gz
-  brainchop-mindmap-fast -o labels.nii.gz input.nii.gz
   brainchop-mindmap --pve -o brain.nii.gz input.nii.gz
   brainchop-mindsnap -o parcels.nii.gz input.nii.gz
 
-MindMap supports GM/WM/CSF fractional maps on CPU and CUDA.
-CUDA accelerates the network and priors; the CAT-lite fit remains on CPU.
+`mindmap` supports experimental GM/WM/CSF partial-volume tissue fractions
+(`--pve`) on CPU and CUDA. CUDA accelerates the network and priors; the
+partial-volume fit runs on CPU. All outputs return to native input space by
+default (pass `--save-conform` for conformed 256^3 space).
 
 NVIDIA execution requires a driver exposing CUDA Driver API 12080 or newer and
 a supported GPU (compute capability 6.0 or newer). Native kernels cover

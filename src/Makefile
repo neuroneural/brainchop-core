@@ -558,6 +558,17 @@ check-payloads:
 		[ "$$actual" = "$$expected" ] || { \
 			echo "$(bin_$(m)) is $$actual bytes, but model_def.h describes $$expected" >&2; \
 			exit 1; }; \
+		if command -v sha256sum >/dev/null 2>&1; then \
+			got_sha=$$(sha256sum $(bin_$(m)) | cut -c1-8); \
+		elif command -v shasum >/dev/null 2>&1; then \
+			got_sha=$$(shasum -a 256 $(bin_$(m)) | cut -c1-8); \
+		else got_sha=""; fi; \
+		if [ -n "$$got_sha" ]; then \
+			hdr_sha=$$(awk '/$(sel_$(m))/ {getline; gsub(/"/, "", $$3); print $$3; exit}' model_weights_sha.h); \
+			[ "$$got_sha" = "$$hdr_sha" ] || { \
+				echo "$(bin_$(m)) sha256 prefix is $$got_sha, but model_weights_sha.h has $$hdr_sha" >&2; \
+				exit 1; }; \
+		fi; \
 		echo "payload $(m): $$actual bytes = $(floats_$(m)) floats"; \
 	)
 
@@ -1683,7 +1694,15 @@ test-guards: models | $(BC_TMP)
 	! ./$(exe_mindgrab) -backend nonexistent -o $(BC_TMP)/bc-invalid.nii.gz $(TEST_IN)
 	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,3,8,8,8,1,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,1,1,1,1,1,1,1); struct.pack_into("<f",h,108,352.0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-nan-test.nii","wb").write(bytes(h)+struct.pack("<f",float("nan"))*512)'
 	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-nan-out.nii.gz $(BC_TMP)/bc-nan-test.nii
-	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,3,8,8,8,1,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,0,0,0,0,0,0,0); struct.pack_into("<f",h,108,352.0); struct.pack_into("<hh",h,252,0,1); struct.pack_into("<12f",h,280,1,0,0,0, 1,0,0,0, 0,0,0,0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-singular-test.nii","wb").write(bytes(h)+struct.pack("<f",100.0)*512)'
+	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,3,8,8,8,1,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,1,1,1,1,1,1,1); struct.pack_into("<f",h,108,352.0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-zero-test.nii","wb").write(bytes(h)+struct.pack("<f",0.0)*512)'
+	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-zero-out.nii.gz $(BC_TMP)/bc-zero-test.nii
+	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-zero-out.nii.gz $(BC_TMP)/bc-zero-test.nii 2>&1 | grep -q "constant"
+	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,4,8,8,8,2,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,1,1,1,1,1,1,1); struct.pack_into("<f",h,108,352.0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-4d-test.nii","wb").write(bytes(h)+struct.pack("<f",1.0)*1024)'
+	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-4d-out.nii.gz $(BC_TMP)/bc-4d-test.nii
+	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-4d-out.nii.gz $(BC_TMP)/bc-4d-test.nii 2>&1 | grep -q "4D (8x8x8x2)"
+	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mgz-out.nii.gz $(BC_TMP)/nonexistent.mgz
+	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mgz-out.nii.gz $(BC_TMP)/nonexistent.mgz 2>&1 | grep -q "unsupported format"
+	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,3,8,8,8,1,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,0,0,0,0,0,0,0); struct.pack_into("<f",h,108,352.0); struct.pack_into("<hh",h,252,0,1); struct.pack_into("<12f",h,280,1,0,0,0, 1,0,0,0, 0,0,0,0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-singular-test.nii","wb").write(bytes(h)+b"".join(struct.pack("<f",float(i)) for i in range(512)))'
 	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-singular-out.nii.gz $(BC_TMP)/bc-singular-test.nii
 	./$(exe_mindgrab) -cpu 0 --no-turbo --crop -o $(BC_TMP)/bc-crop-test.nii.gz $(TEST_IN)
 

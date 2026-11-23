@@ -44,17 +44,20 @@ Metrics below are from the locked evaluation ledger (`v3.8` spec / `v4.0` releas
 
 | Benchmark | `mindmap` | `mindsnap` | `mindmap-fast` | SynthSeg 2.0 | FastSurferVINN 2.4.2 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 6 Manual-Label Cohorts Mean Dice (Mindboggle, IBSR18, LPBA40, HiSUB25, MALC-35, Hammers) | **0.792** | **0.790** | 0.790 | 0.801 | 0.803 |
-| Mindboggle-101 Shared-11 Manual Dice | **0.829** | 0.826 | 0.822 | 0.827 | 0.843 |
-| Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | **0.720** | — | 0.714 (`--parc`) | 0.824 |
-| EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | **0.794** | 0.684 | 0.009 | 0.792 | 0.811 |
-| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | **2.26%** | 2.66% | — | 3.38% |
-| Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | **0.636** | **0.649** | **0.627** | 0.621 | 0.397 |
-| Severe Acquisition Noise (10% head-masked noise, Mindboggle `N=20`, Shared-11 Dice) | **0.819** | **0.808** | **0.813** | 0.784 | 0.796 |
-| Same-Laptop Apple M1 (16 GB) Runtime & Peak Memory *(WebGPU vs CPU / MPS)* | **3.8 s** (1.6 GiB) | **3.9 s** (1.6 GiB) | **2.3 s** (1.3 GiB) | 656 s (16.7 GiB) | 311 s (8.4 GiB) |
+| 6 Manual-Label Cohorts Mean Dice (Mindboggle, IBSR18, LPBA40, HiSUB25, MALC-35, Hammers) | 0.792 | 0.790 | 0.790 | 0.801 | **0.803** |
+| Mindboggle-101 Shared-11 Manual Dice | 0.829 | 0.826 | 0.822 | 0.827 | **0.843** |
+| Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | 0.720 | — | 0.714 (`--parc`) | **0.824** |
+| EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | 0.794 | 0.684 | 0.009 | 0.792 | **0.811** |
+| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | 2.26% | 2.66% | — | 3.38% |
+| Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | 0.636 | **0.649** | 0.627 | 0.621 | 0.397 |
+| Severe Acquisition Noise (10% head-masked noise, Mindboggle `N=20`, Shared-11 Dice) | **0.819** | 0.808 | 0.813 | 0.784 | 0.796 |
+| Same-Laptop Apple M1 (16 GB) Runtime & Peak Memory *(WebGPU vs CPU / MPS)* | 3.8 s (1.6 GiB) | 3.9 s (1.6 GiB) | **2.3 s (1.3 GiB)** | 656 s (16.7 GiB, swaps) | 311 s (8.4 GiB) |
+
+*(Bold indicates the best value in each row. On the 16 GB Apple M1 laptop, SynthSeg 2.0's 16.7 GiB peak footprint exceeds physical RAM and triggers macOS swap.)*
 
 **Known limitations:**
 - **Thick-slice clinical scans (5 mm):** SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`) outperform isotropic-trained BrainChop (`0.734–0.739`) on heavily anisotropic 5 mm acquisitions.
+- **Sub-voxel grid shifts & large head tilts:** Inference runs directly on a single conformed 1 mm `256³` grid without affine registration or test-time augmentation, so sub-voxel padding/grid shifts or large head tilts can reduce boundary overlap compared to scan–rescan repeatability.
 - **`mindmap-fast` hippocampal atrophy:** `mindmap-fast` does not include the atrophy-repaired training regime (HarP asymmetry `r = 0.009`); use `mindmap` or `mindsnap` for hippocampal morphometry or dementia cohorts.
 - **Experimental `--pve` tissue fractions:** Continuous GM/WM/CSF/Brain probability maps (`mindmap --pve` / `segmentTissues`) are experimental and have not yet been quantitatively benchmarked against CAT12 or FSL FAST.
 
@@ -80,7 +83,7 @@ pip install brainchop
 uvx brainchop input.nii.gz -o labels.nii.gz
 ```
 
-Prebuilt wheels (`win_amd64`, `macosx_14_0_arm64`, `manylinux_2_28_x86_64`) install in ~2 seconds with **zero runtime dependencies** (no PyTorch, no tinygrad, no CUDA Toolkit, no compiler needed). On macOS 13.2–13.x Apple Silicon, pip falls back to a local source build (or install via Homebrew / the signed `.pkg` below), because PEP 425 wheel tags require minor version `0` on macOS 11+ (`macosx_14_0_arm64`). Source installs automatically detect your CPU/GPU (Apple Metal, NVIDIA CUDA Driver API, AMD ROCm HIP) and compile locally. See [docs/pypi.md](docs/pypi.md) for details.
+Prebuilt wheels (`win_amd64`, `macosx_14_0_arm64`, `manylinux_2_28_x86_64`) install in ~2 seconds with **zero runtime dependencies** (no PyTorch, no tinygrad, no CUDA Toolkit, no compiler needed). GPU backends (`Metal`, `CUDA`, `HIP`) run at full native speed in prebuilt wheels; for peak **CPU-only** throughput on newer hosts (e.g., Apple SME or x86-64 AVX-512 VNNI), build locally via `pip install --no-binary brainchop brainchop` or `make -C src` so the compiler targets your host CPU ISA rather than a portable baseline. On macOS 13.2–13.x Apple Silicon, pip falls back to a local source build (or install via Homebrew / the signed `.pkg` below), because PEP 425 wheel tags require minor version `0` on macOS 11+ (`macosx_14_0_arm64`). Source installs automatically detect your CPU/GPU (Apple Metal, NVIDIA CUDA Driver API, AMD ROCm HIP) and compile locally. See [docs/pypi.md](docs/pypi.md) for details.
 
 ### Homebrew (macOS & Linux)
 

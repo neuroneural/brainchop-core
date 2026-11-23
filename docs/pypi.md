@@ -2,10 +2,15 @@
 
 `brainchop` distributes prebuilt portable wheels (`win_amd64`, `macosx_arm64`,
 `linux_x86_64`) plus a zero-dependency PEP 517 source package (`sdist`) that
-builds the four native runtimes locally on any supported platform. The
-distribution version (`packaging/PYPI_VERSION`) and native runtime version
-(`src/version.h`) are both **1.0.0**, succeeding the legacy Python/tinygrad
-`brainchop==0.2.5` release.
+builds the four native runtimes locally on any supported platform. Prebuilt
+wheels deliver full native GPU performance (`Metal`, `CUDA`, `HIP`) while
+compiling CPU kernels for portable ISAs (`AVX2+FMA` on x86-64, baseline `arm64`
+on macOS); on CPU-only hosts with newer SIMD extensions (e.g., Apple SME or
+AVX-512 VNNI), `pip install --no-binary brainchop brainchop` builds with
+host-specific CPU flags for faster CPU inference. The distribution version
+(`packaging/PYPI_VERSION`) and native runtime version (`src/version.h`)
+succeeded the legacy Python/tinygrad `brainchop==0.2.5` release at `1.0.0`
+(upcoming default-space and default-model changes target `1.1.0`).
 
 ## Installation, shared caches and first use
 

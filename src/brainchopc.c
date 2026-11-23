@@ -21,9 +21,11 @@
 #include "cat_lite.h"
 #include "cli.h"
 #include "model_specs.h"
+#include "model_weights_sha.h"
 #include "payload.h"
 #include "preprocess.h"
 #include "version.h"
+#include <ctype.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -171,8 +173,14 @@ static int64_t round_i64(double x) {
 static int sanitize_input(nifti_image *nim, int source_datatype) {
 	float *value = nim->data;
 	size_t finite = 0, replaced = 0;
+	float vmin = INFINITY, vmax = -INFINITY;
 	for (size_t i = 0; i < (size_t)nim->nvox; i++) {
-		if (isfinite(value[i])) { finite++; continue; }
+		if (isfinite(value[i])) {
+			finite++;
+			if (value[i] < vmin) vmin = value[i];
+			if (value[i] > vmax) vmax = value[i];
+			continue;
+		}
 		value[i] = 0.0f;
 		replaced++;
 	}
@@ -187,6 +195,11 @@ static int sanitize_input(nifti_image *nim, int source_datatype) {
 	if (replaced)
 		fprintf(stderr, "brainchopc: WARNING - replaced %zu non-finite voxels with 0\n",
 			replaced);
+	if (vmin == vmax) {
+		fprintf(stderr, "brainchopc: input image is constant (all %zu finite voxels equal %g; zero contrast)\n",
+			finite, (double)vmin);
+		return 1;
+	}
 	return 0;
 }
 
@@ -296,94 +309,12 @@ static nifti_image *copy_header(const nifti_image *source) {
 	return copy;
 }
 
-/*
- * Derive the first 8 lowercase hex characters (32 bits) of the FIPS 180-4
- * SHA-256 digest of the embedded model.bin payload. Constants are computed
- * from the standard fractional prime square/cube roots (21 bits of double
- * precision margin above 32 bits), keeping zero external dependencies and
- * leaving all CUDA/HIP manifest-locked descriptors untouched.
- */
-static uint32_t bc_rotr32(uint32_t v, unsigned bits) {
-	return (v >> bits) | (v << (32u - bits));
-}
-
-static void bc_sha256_block(uint32_t st[8], const uint32_t rk[64],
-		const unsigned char blk[64]) {
-	uint32_t msg[64];
-	for (int i = 0; i < 16; i++) {
-		msg[i] = ((uint32_t)blk[4 * i] << 24) | ((uint32_t)blk[4 * i + 1] << 16) |
-		         ((uint32_t)blk[4 * i + 2] << 8) | (uint32_t)blk[4 * i + 3];
-	}
-	for (int i = 16; i < 64; i++) {
-		uint32_t p0 = bc_rotr32(msg[i - 15], 7u) ^ bc_rotr32(msg[i - 15], 18u) ^ (msg[i - 15] >> 3u);
-		uint32_t p1 = bc_rotr32(msg[i - 2], 17u) ^ bc_rotr32(msg[i - 2], 19u) ^ (msg[i - 2] >> 10u);
-		msg[i] = msg[i - 16] + p0 + msg[i - 7] + p1;
-	}
-	uint32_t v0 = st[0], v1 = st[1], v2 = st[2], v3 = st[3];
-	uint32_t v4 = st[4], v5 = st[5], v6 = st[6], v7 = st[7];
-	for (int i = 0; i < 64; i++) {
-		uint32_t u1 = bc_rotr32(v4, 6u) ^ bc_rotr32(v4, 11u) ^ bc_rotr32(v4, 25u);
-		uint32_t ch = (v4 & v5) ^ ((~v4) & v6);
-		uint32_t t1 = v7 + u1 + ch + rk[i] + msg[i];
-		uint32_t u0 = bc_rotr32(v0, 2u) ^ bc_rotr32(v0, 13u) ^ bc_rotr32(v0, 22u);
-		uint32_t mj = (v0 & v1) ^ (v0 & v2) ^ (v1 & v2);
-		uint32_t t2 = u0 + mj;
-		v7 = v6; v6 = v5; v5 = v4; v4 = v3 + t1;
-		v3 = v2; v2 = v1; v1 = v0; v0 = t1 + t2;
-	}
-	st[0] += v0; st[1] += v1; st[2] += v2; st[3] += v3;
-	st[4] += v4; st[5] += v5; st[6] += v6; st[7] += v7;
-}
-
-static const char *model_weights_sha8(void) {
-	static char cached[9];
-	if (cached[0]) return cached;
-	uint32_t st[8], rk[64];
-	int found = 0;
-	for (int cand = 2; found < 64; cand++) {
-		int is_prime = 1;
-		for (int d = 2; d * d <= cand; d++) {
-			if (cand % d == 0) { is_prime = 0; break; }
-		}
-		if (!is_prime) continue;
-		if (found < 8) {
-			double r2 = sqrt((double)cand);
-			st[found] = (uint32_t)((r2 - floor(r2)) * 4294967296.0);
-		}
-		double r3 = cbrt((double)cand);
-		rk[found] = (uint32_t)((r3 - floor(r3)) * 4294967296.0);
-		found++;
-	}
-	const unsigned char *buf = bc_model_payload_begin;
-	size_t total = (size_t)(bc_model_payload_end - bc_model_payload_begin);
-	size_t pos = 0;
-	while (pos + 64u <= total) {
-		bc_sha256_block(st, rk, buf + pos);
-		pos += 64u;
-	}
-	unsigned char pad[64];
-	memset(pad, 0, sizeof(pad));
-	size_t rem = total - pos;
-	if (rem) memcpy(pad, buf + pos, rem);
-	pad[rem] = 0x80u;
-	if (rem >= 56u) {
-		bc_sha256_block(st, rk, pad);
-		memset(pad, 0, sizeof(pad));
-	}
-	uint64_t nbits = (uint64_t)total * 8u;
-	for (int i = 0; i < 8; i++)
-		pad[63 - i] = (unsigned char)((nbits >> (8u * (unsigned)i)) & 0xffu);
-	bc_sha256_block(st, rk, pad);
-	snprintf(cached, sizeof(cached), "%08x", st[0]);
-	return cached;
-}
-
 static void format_provenance_descrip(char descrip[80],
 		const char *backend_name, int no_turbo, int is_pve) {
 	const char *model_name =
 		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" : BC_MODEL_NAME;
 	const char *bname = backend_name ? backend_name : "unknown";
-	const char *wsha = model_weights_sha8();
+	const char *wsha = BC_MODEL_WEIGHTS_SHA8;
 	memset(descrip, 0, 80);
 	if (is_pve) {
 		snprintf(descrip, 80, "brainchop %s %s/%s %s pve",
@@ -798,6 +729,17 @@ static int run_model(nifti_image *original, int input_datatype,
 	return 0;
 }
 
+static int has_suffix_ci(const char *path, const char *suffix) {
+	size_t plen = strlen(path), slen = strlen(suffix);
+	if (plen < slen) return 0;
+	const char *tail = path + (plen - slen);
+	for (size_t i = 0; i < slen; i++) {
+		if (tolower((unsigned char)tail[i]) != tolower((unsigned char)suffix[i]))
+			return 0;
+	}
+	return 1;
+}
+
 int main(int argc, char **argv) {
 	bc_cli_options cli;
 	int parse_status=bc_cli_parse(argc,argv,&cli);
@@ -813,6 +755,20 @@ int main(int argc, char **argv) {
 	if(cli.cpu_threads>0)
 		fprintf(stderr,"brainchopc: warning: -cpu has no effect in this serial build\n");
 #endif
+	if (has_suffix_ci(cli.input, ".mgz") || has_suffix_ci(cli.input, ".mgh")) {
+		fprintf(stderr, "brainchopc: unsupported format '%s' (FreeSurfer MGZ/MGH); "
+			"CLI reads NIfTI-1 (.nii, .nii.gz, .nii.zst). Convert with: "
+			"mri_convert input.mgz input.nii.gz\n", cli.input);
+		return 1;
+	}
+	if (has_suffix_ci(cli.input, ".dcm") || has_suffix_ci(cli.input, ".nrrd") ||
+			has_suffix_ci(cli.input, ".nhdr") || has_suffix_ci(cli.input, ".mha") ||
+			has_suffix_ci(cli.input, ".mhd")) {
+		fprintf(stderr, "brainchopc: unsupported format '%s'; "
+			"CLI reads NIfTI-1 (.nii, .nii.gz, .nii.zst) -- convert to NIfTI first\n",
+			cli.input);
+		return 1;
+	}
 	float *weights=load_model_weights();
 	if(!weights)return 1;
 	bc_stage(NULL);
@@ -821,7 +777,16 @@ int main(int argc, char **argv) {
 	if (!nim) { fprintf(stderr,"brainchopc: unable to read %s\n",cli.input); free(weights);return 1; }
 	if (nim->nx<1 || nim->ny<1 || nim->nz<1 ||
 	    nim->nvox != nim->nx*nim->ny*nim->nz) {
-		fprintf(stderr,"brainchopc: input must be a scalar 3D image\n");
+		if (nim->ndim >= 4 && nim->nt > 1) {
+			fprintf(stderr, "brainchopc: input is 4D (%lldx%lldx%lldx%lld); "
+				"BrainChop expects a single 3D scalar volume (extract one 3D frame first)\n",
+				(long long)nim->nx, (long long)nim->ny, (long long)nim->nz, (long long)nim->nt);
+		} else {
+			fprintf(stderr, "brainchopc: input must be a scalar 3D image "
+				"(got %lldD, dims %lldx%lldx%lld, nvox=%lld)\n",
+				(long long)nim->ndim, (long long)nim->nx, (long long)nim->ny,
+				(long long)nim->nz, (long long)nim->nvox);
+		}
 		free(weights);nifti_image_free(nim); return 1;
 	}
 	int input_datatype=nim->datatype;

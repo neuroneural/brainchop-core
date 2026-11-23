@@ -45,6 +45,27 @@ import { setupNet, releaseV4Workspace, type V4ExecuteFn } from './meshnet_fast_v
 declare const __BC_VERSION__: string | undefined
 const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.0.0'
 
+/** Reject all-NaN or constant (e.g. all-zero) inputs before conform/inference. */
+function assertNonConstantInput(data: ArrayLike<number>): void {
+  let finite = 0
+  let vmin = Infinity
+  let vmax = -Infinity
+  for (let i = 0; i < data.length; i++) {
+    const v = data[i]
+    if (Number.isFinite(v)) {
+      finite++
+      if (v < vmin) vmin = v
+      if (v > vmax) vmax = v
+    }
+  }
+  if (finite === 0) {
+    throw new Error('brainchopc: input has no finite voxels')
+  }
+  if (vmin === vmax) {
+    throw new Error(`brainchopc: input image is constant (all ${finite} finite voxels equal ${vmin}; zero contrast)`)
+  }
+}
+
 const CONFORM_DIM = 256
 const CONFORM_SHAPE: [number, number, number] = [CONFORM_DIM, CONFORM_DIM, CONFORM_DIM]
 const CONFORM_NVOX = CONFORM_DIM * CONFORM_DIM * CONFORM_DIM
@@ -519,6 +540,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
   let orig
   try {
     orig = readNifti1(request.input)
+    assertNonConstantInput(orig.data)
   } catch (err) {
     await weightsPromise.catch(() => {})
     throw new BrainchopError(
@@ -579,7 +601,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
 
   // 4. Fetch weights & run V4 WebGPU inference
   const weightBytes = await weightsPromise
-  const segDescrip = `brainchop ${BC_VERSION} ${canonical}/${sha256Prefix8(weightBytes)} webgpu`
+  const segDescrip = `brainchop ${BC_VERSION} ${canonical}/${await sha256Prefix8(weightBytes)} webgpu`
   const outputs = await runV4Inference({
     canonical,
     model: request.model,
@@ -844,6 +866,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   let orig
   try {
     orig = readNifti1(request.input)
+    assertNonConstantInput(orig.data)
   } catch (err) {
     await weightsPromise.catch(() => {})
     throw new BrainchopError(
@@ -892,7 +915,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
 
   // 4. Fetch weights & run V4 WebGPU grouped tissue-prior inference
   const weightBytes = await weightsPromise
-  const pveDescrip = `brainchop ${BC_VERSION} ${canonical}/${sha256Prefix8(weightBytes)} webgpu pve`
+  const pveDescrip = `brainchop ${BC_VERSION} ${canonical}/${await sha256Prefix8(weightBytes)} webgpu pve`
   const outputs = await runV4Inference({
     canonical,
     model: request.model,

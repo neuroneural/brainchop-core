@@ -307,6 +307,7 @@ static long nii_seek(NIIFILE f, long offset, int whence)
    return fseek(f->nzfptr, offset, whence);
 }
 
+#if 0
 static long nii_tell(NIIFILE f)
 {
    if (!f) return 0;
@@ -329,6 +330,7 @@ static int nii_rewind(NIIFILE f)
 /*========== Magic bytes ==========*/
 
 static char nifti1_magic[4] = { 'n', '+', '1', '\0' };
+#endif
 static char nifti2_magic[8] = { 'n', '+', '2', '\0', '\r', '\n', '\032', '\n' };
 
 /*========== Utility functions ==========*/
@@ -1808,10 +1810,12 @@ static int nifti_convert_nim2n2hdr(const nifti_image *nim, nifti_2_header *hdr)
 
 /*========== Extensions ==========*/
 
+#if 0
 static int nifti_is_valid_ecode(int ecode)
 {
    return (ecode >= NIFTI_ECODE_IGNORE && ecode <= NIFTI_MAX_ECODE && !(ecode & 1));
 }
+#endif
 
 static int nifti_check_extension(int size, int code, int64_t rem)
 {

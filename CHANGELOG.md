@@ -2,15 +2,21 @@
 
 All notable changes to BrainChop Core are documented in this file.
 
-## [Unreleased]
+## [Unreleased] *(targeting 1.1.0)*
+
+### Breaking Changes
+
+- **Default Model & Output Space (Python CLI, Python API & C Dispatcher):** Because `1.0.0` shipped on PyPI with `mindmap-fast` and conformed `256³` output by default in the Python CLI/API, these changes will release as **1.1.0** (not `1.0.1`):
+  - Default model is now `mindmap` (full-capacity atrophy-repaired 18-class model) instead of `mindmap-fast`. Pass `-m mindmap-fast` / `model="mindmap-fast"` to retain the faster lightweight model.
+  - Default output space is now **native input space** across the C dispatcher, Python CLI, Python API (`save_conform=False`), and browser package. Pass `--save-conform` / `save_conform=True` to preserve the previous conformed `256³` output grid (`--inverse-conform` / `inverse_conform` remain accepted as compatibility aliases).
 
 ### Public Release Polish
 
-- **Unified Defaults:** Standardized default model to `mindmap` (full-capacity atrophy-repaired 18-class model) and default output space to native input space across the C dispatcher, Python CLI, Python API (`save_conform=False`), and browser package (`--save-conform` opts into conformed 256³ space; `--inverse-conform` / `inverse_conform` retained as compatibility aliases).
 - **NIfTI-1 Provenance Header:** Stamped version, model, 8-character `model.bin` SHA-256 weight prefix, backend, and precision/mode provenance into the NIfTI-1 `descrip` header (`brainchop <version> <model>/<sha256[:8]> <backend>[ <mode>]`, e.g., `brainchop 1.0.0 mindmap/58006d19 metal turbo`, `brainchop 1.0.0 mindsnap/995cdb52 cpu exact`, `brainchop 1.0.0 mindmap/58006d19 webgpu`) across native and browser outputs.
+- **Input Validation & Actionable Diagnostics:** Reject constant / zero-contrast (e.g. all-zero) volumes explicitly in C/WASM and WebGPU instead of emitting hallucinated segmentations; report clear format errors for `.mgz`/`.mgh`/DICOM/NRRD CLI inputs and full dimensions for 4D+ NIfTI inputs; eliminate unused-static compiler warnings in `src/nifti_io.c`.
 - **Model Cards, Checksums & Naming:** Added Model Cards with locked validation metrics, honest limitations, and SHA-256 weight provenance table in `README.md`; unified user-facing names (`mindmap`, `mindsnap`, `mindmap-fast`, `mindgrab`, and experimental GM/WM/CSF partial-volume tissue fractions `--pve`), dropping internal nicknames and unproven surface claims.
 - **Browser Fallback Progress:** Emit `inference` progress stage when Emscripten CPU/WebGL2 fallback begins execution.
-- **Repository & Documentation Hygiene:** Split `docs/building-and-testing.md` into `docs/building.md` and `docs/testing-and-wasm.md`, cleaned dangling internal pointers and archived test tarballs, clarified macOS `14_0` PEP 425 wheel vs `13.2+` native builds, and updated `THIRD_PARTY_NOTICES.md`.
+- **Repository & Documentation Hygiene:** Split `docs/building-and-testing.md` into `docs/building.md` and `docs/testing-and-wasm.md`, cleaned dangling internal pointers and archived test tarballs, clarified macOS `14_0` PEP 425 wheel vs `13.2+` native builds and portable wheel CPU ISAs, and updated `THIRD_PARTY_NOTICES.md`.
 
 ## [1.0.0] - 2026-11-22
 

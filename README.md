@@ -172,9 +172,14 @@ Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/RE
 | **CPU** | Apple SME / NEON, x86-64 AVX-512 VNNI / AVX-VNNI / AVX2+FMA | Yes | 8-bit Turbo & bit-exact fp32 across compilers/architectures |
 | **OpenCL** | Explicit opt-in (`--backend opencl`) | No | Available via `-backend opencl` when explicitly requested |
 
-**Cross-platform determinism & provenance:**
+**Cross-platform determinism, NIfTI headers & provenance:**
 - Both the default 8-bit activation path (`turbo`) and GPU FP16 paths can differ at a small fraction of boundary voxels across GPU/CPU architectures (typical whole-brain voxel agreement >99.9%). For longitudinal or multi-site studies, pin a single backend across the cohort — or pass `-cpu 0 --no-turbo` for bit-exact FP32 CPU reproducibility across machines.
-- Every output NIfTI-1 file records provenance in its 80-byte `descrip` header field (e.g., `brainchop 1.0.0 mindmap metal turbo` or `brainchop 1.0.0 mindsnap cpu exact`) so downstream QC scripts can verify backend consistency.
+- Every output NIfTI-1 file stamps provenance into its 80-byte `descrip` header field in the form:
+  ```text
+  brainchop <version> <model>/<sha256[:8]> <backend>[ <mode>]
+  ```
+  where `<sha256[:8]>` is the first 8 lowercase hex characters of the shipped `model.bin` SHA-256 digest (matching [Weight Provenance](#weight-provenance-sha-256) above), so outputs uniquely identify both the exact weights and execution backend even when checkpoints are updated between version bumps (e.g., `brainchop 1.0.0 mindmap/58006d19 metal turbo`, `brainchop 1.0.0 mindsnap/995cdb52 cpu exact`, `brainchop 1.0.0 mindmap/58006d19 metal pve`, `brainchop 1.0.0 mindmap/58006d19 webgpu`).
+- Output `intent_code` follows NIfTI-1 conventions: categorical label volumes (`mindmap`, `mindsnap`, `mindmap-fast`) and `mindgrab --mask` set `NIFTI_INTENT_LABEL` (`1002`); continuous partial-volume maps (`--pve`) and raw `--export-classes` maps set `NIFTI_INTENT_NONE` (`0`); `mindgrab` skull-stripped intensity outputs preserve the input volume's intent and datatype.
 
 ## Documentation
 

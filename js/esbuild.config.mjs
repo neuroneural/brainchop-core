@@ -23,8 +23,13 @@ const common = {
 //
 // __BC_WORKER__ is inlined as a string literal so a host bundler still sees
 // `new Worker(new URL('<literal>', import.meta.url))` and emits that worker.
+const PKG_VERSION = JSON.parse(readFileSync('package.json', 'utf8')).version
+
 const entry = (name, worker, plugins = []) => {
-  const define = { __BC_WORKER__: JSON.stringify(`./${worker}.js`) }
+  const define = {
+    __BC_WORKER__: JSON.stringify(`./${worker}.js`),
+    __BC_VERSION__: JSON.stringify(PKG_VERSION),
+  }
   return [
     build({ ...common, plugins, define, entryPoints: ['src/index.ts'], outfile: `dist/${name}.js` }),
     build({ ...common, plugins, define, entryPoints: ['src/worker.ts'], outfile: `dist/${worker}.js` }),

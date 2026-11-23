@@ -5,6 +5,9 @@ import { execFileSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { createHash } from 'node:crypto'
+
+import { sha256Prefix8 } from '../src/webgpu/sha256.ts'
 
 import {
   parseSafetensors,
@@ -548,4 +551,20 @@ test('conform (fHigh=0.98, CT Cormack, comply), bwlabels/EDT, and native label r
   let fg = 0
   for (let i = 0; i < resliced.img.length; i++) if (resliced.img[i] > 0) fg++
   assert.ok(fg > 100_000, `expected >100k foreground resliced voxels, got ${fg}`)
+})
+
+test('sha256Prefix8 matches node:crypto across edge lengths and all 4 model.bin payloads', () => {
+  for (const len of [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1024]) {
+    const buf = new Uint8Array(len)
+    for (let i = 0; i < len; i++) buf[i] = (i * 37 + 13) & 0xff
+    const expected = createHash('sha256').update(buf).digest('hex').slice(0, 8)
+    assert.equal(sha256Prefix8(buf), expected, `mismatch at length ${len}`)
+    // Repeated call hits WeakMap cache with identical value
+    assert.equal(sha256Prefix8(buf), expected)
+  }
+  for (const dir of ['mindgrab', 'mindmap', 'mindsnap', 'model16chan18cls']) {
+    const raw = new Uint8Array(readFileSync(join(repoRoot, 'src', 'models', dir, 'model.bin')))
+    const expected = createHash('sha256').update(raw).digest('hex').slice(0, 8)
+    assert.equal(sha256Prefix8(raw), expected, `model.bin SHA-256 prefix mismatch for ${dir}`)
+  }
 })

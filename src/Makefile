@@ -1612,12 +1612,14 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	python3 ../test/nii_diff.py $(TEST_MS_NATIVE) $(BC_TMP)/bc-ms-native-test.nii.gz 0
 	./$(exe_mindsnap) -cpu 5 --no-turbo --save-conform -o $(BC_TMP)/bc-ms-threads.nii.gz $(TEST_IN)
 	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-ms-conf-test.nii.gz","rb").read(), "mindsnap output depends on the thread count"'
-	# Provenance stamped into NIfTI-1 descrip header across all four models.
-	python3 -c 'import sys; sys.path.insert(0, "../test"); import nii_diff; \
-		checks = [("$(BC_TMP)/bc-mg-test.nii.gz", "mindgrab cpu exact"), \
-			("$(BC_TMP)/bc-m16-conf-test.nii.gz", "mindmap-fast cpu exact"), \
-			("$(BC_TMP)/bc-mm-conf-test.nii.gz", "mindmap cpu exact"), \
-			("$(BC_TMP)/bc-ms-conf-test.nii.gz", "mindsnap cpu exact")]; \
+	# Provenance stamped into NIfTI-1 descrip header across all four models,
+	# including the 8-hex-char SHA-256 prefix of each embedded model.bin.
+	python3 -c 'import hashlib, pathlib, sys; sys.path.insert(0, "../test"); import nii_diff; \
+		sha8 = lambda m: hashlib.sha256(pathlib.Path("models/" + m + "/model.bin").read_bytes()).hexdigest()[:8]; \
+		checks = [("$(BC_TMP)/bc-mg-test.nii.gz", "mindgrab/" + sha8("mindgrab") + " cpu exact"), \
+			("$(BC_TMP)/bc-m16-conf-test.nii.gz", "mindmap-fast/" + sha8("model16chan18cls") + " cpu exact"), \
+			("$(BC_TMP)/bc-mm-conf-test.nii.gz", "mindmap/" + sha8("mindmap") + " cpu exact"), \
+			("$(BC_TMP)/bc-ms-conf-test.nii.gz", "mindsnap/" + sha8("mindsnap") + " cpu exact")]; \
 		bad = [(p, nii_diff.descrip(nii_diff.read(p)), t) for p, t in checks \
 			if not (nii_diff.descrip(nii_diff.read(p)).startswith("brainchop ") \
 				and nii_diff.descrip(nii_diff.read(p)).endswith(" " + t))]; \
@@ -1743,10 +1745,11 @@ ifeq ($(METAL),1)
 	python3 ../test/nii_dice.py $(TEST_MS) $(BC_TMP)/bc-turbo-ms.nii.gz $(TURBO_GATE)
 	./$(exe_mindsnap) -backend metal -o $(BC_TMP)/bc-turbo-msn.nii.gz $(TEST_2MM)
 	python3 ../test/nii_dice.py $(TEST_MS_NATIVE) $(BC_TMP)/bc-turbo-msn.nii.gz $(TURBO_GATE)
-	python3 -c 'import sys; sys.path.insert(0, "../test"); import nii_diff; \
-		checks = [("$(BC_TMP)/bc-metal-mg.nii.gz", "mindgrab metal exact"), \
-			("$(BC_TMP)/bc-turbo-mg.nii.gz", "mindgrab metal turbo"), \
-			("$(BC_TMP)/bc-pve-metal_gm.nii.gz", "mindmap metal pve")]; \
+	python3 -c 'import hashlib, pathlib, sys; sys.path.insert(0, "../test"); import nii_diff; \
+		sha8 = lambda m: hashlib.sha256(pathlib.Path("models/" + m + "/model.bin").read_bytes()).hexdigest()[:8]; \
+		checks = [("$(BC_TMP)/bc-metal-mg.nii.gz", "mindgrab/" + sha8("mindgrab") + " metal exact"), \
+			("$(BC_TMP)/bc-turbo-mg.nii.gz", "mindgrab/" + sha8("mindgrab") + " metal turbo"), \
+			("$(BC_TMP)/bc-pve-metal_gm.nii.gz", "mindmap/" + sha8("mindmap") + " metal pve")]; \
 		bad = [(p, nii_diff.descrip(nii_diff.read(p)), t) for p, t in checks \
 			if not (nii_diff.descrip(nii_diff.read(p)).startswith("brainchop ") \
 				and nii_diff.descrip(nii_diff.read(p)).endswith(" " + t))]; \

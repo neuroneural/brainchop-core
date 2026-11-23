@@ -24,6 +24,7 @@ import {
   NIFTI_INTENT_LABEL,
   NIFTI_INTENT_NONE,
 } from './nifti.js'
+import { sha256Prefix8 } from './sha256.js'
 import { conformVolumeData, INFERENCE_CONFORM_FHIGH } from './conform-volume.js'
 import { resliceVolumeData, invertAffine4x4, mulAffine4x4 } from './reslice-volume.js'
 import { BWLabeler, largestBinaryComponent26, growMaskBorderMm } from './bwlabels.js'
@@ -39,6 +40,10 @@ import {
   formatV4PlanDiagnostic,
 } from './gpu-compatibility.js'
 import { setupNet, releaseV4Workspace, type V4ExecuteFn } from './meshnet_fast_v4_runner.js'
+
+/** Set by esbuild from js/package.json; falls back when run unbundled in tests. */
+declare const __BC_VERSION__: string | undefined
+const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.0.0'
 
 const CONFORM_DIM = 256
 const CONFORM_SHAPE: [number, number, number] = [CONFORM_DIM, CONFORM_DIM, CONFORM_DIM]
@@ -574,6 +579,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
 
   // 4. Fetch weights & run V4 WebGPU inference
   const weightBytes = await weightsPromise
+  const segDescrip = `brainchop ${BC_VERSION} ${canonical}/${sha256Prefix8(weightBytes)} webgpu`
   const outputs = await runV4Inference({
     canonical,
     model: request.model,
@@ -662,7 +668,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
         calMin: 0,
         calMax: 0,
         intentCode: NIFTI_INTENT_LABEL,
-        descrip: `brainchop ${canonical} webgpu`,
+        descrip: segDescrip,
       })
     }
 
@@ -681,7 +687,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       datatypeCode: orig.header.datatypeCode,
       sclSlope: 1,
       sclInter: 0,
-      descrip: `brainchop ${canonical} webgpu`,
+      descrip: segDescrip,
     })
 
     const elapsedMs = performance.now() - started
@@ -773,7 +779,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 0,
       intentCode: NIFTI_INTENT_LABEL,
-      descrip: `brainchop ${canonical} webgpu`,
+      descrip: segDescrip,
     })
   } else {
     if (!isValidAffine4x4(orig.header.stoXyz)) {
@@ -806,7 +812,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 0,
       intentCode: NIFTI_INTENT_LABEL,
-      descrip: `brainchop ${canonical} webgpu`,
+      descrip: segDescrip,
     })
   }
 
@@ -886,6 +892,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
 
   // 4. Fetch weights & run V4 WebGPU grouped tissue-prior inference
   const weightBytes = await weightsPromise
+  const pveDescrip = `brainchop ${BC_VERSION} ${canonical}/${sha256Prefix8(weightBytes)} webgpu pve`
   const outputs = await runV4Inference({
     canonical,
     model: request.model,
@@ -969,7 +976,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
         calMin: 0,
         calMax: 1,
         intentCode: NIFTI_INTENT_NONE,
-        descrip: `brainchop ${canonical} webgpu pve`,
+        descrip: pveDescrip,
       })
     }
     const quantU8 = sameGrid
@@ -993,7 +1000,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 1,
       intentCode: NIFTI_INTENT_NONE,
-      descrip: `brainchop ${canonical} webgpu pve`,
+      descrip: pveDescrip,
     })
   }
 

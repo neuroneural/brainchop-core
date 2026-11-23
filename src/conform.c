@@ -308,7 +308,7 @@ static int do_reslice(nifti_image *nim, const int out_dim[3], const float out_mm
 	 * is only ~350 ms. It does NOT move the inverse reslice in the
 	 * `reslice + mask` stage (105 ms at one thread, 105 at 32) -- that stage is
 	 * dominated by the two serial mask loops over the input volume, not by this
-	 * function. Do not read a gain there. CLAUDE.md records the reslice as
+	 * function. Do not read a gain there. benchmarking records the reslice as
 	 * "~0.1%", which was measured against a 140 s CPU run.
 	 */
 	reslice_slab slab = { .in = in, .out = out, .out_to_in = out_to_in,

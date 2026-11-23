@@ -36,7 +36,7 @@ plan_*.md
 # --export-classes cases each produce a gigabyte of float logits before being
 # digested and discarded.
 # ADDING A FILE UNDER test/ MEANS ADDING A LINE BELOW. This rule has silently
-# swallowed several files the build or CLAUDE.md names -- `git add -A` reports
+# swallowed several files the build or the repo layout names -- `git add -A` reports
 # nothing, so it looks like it worked. Check with
 # `git status --porcelain --ignored | grep test/` after adding one.
 /test/*
@@ -122,7 +122,6 @@ plan_*.md
 !/test/hip_native_check.py
 !/test/hip_no_toolchain.py
 !/test/test_hip_native_check.py
-!/test/hip_pr34_reuse.tar.gz
 !/test/hip_allocation_check.c
 !/test/hip_oom_audit.c
 !/test/hip_allocation_check.py

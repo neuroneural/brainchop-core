@@ -14,19 +14,19 @@ import subprocess
 
 NATIVE_MODELS = {
     "mindgrab": "Skull stripping in any modality (native)",
-    "mindmap-fast": "16-channel, 18-class MindMap v3.5 segmentation (native)",
-    "mindmap": "24-channel, 18-class MindMap-18 v4.0 Gold segmentation (native)",
-    "mindsnap": "24-channel, 104-class MindSnap-104 v4.0 Gold Desikan-Killiany parcellation (native)",
+    "mindmap": "18-class cortical and subcortical segmentation (native, default)",
+    "mindsnap": "104-class Desikan-Killiany cortical and subcortical parcellation (native)",
+    "mindmap-fast": "Fast lightweight 18-class segmentation (native)",
 }
 MODEL_ALIASES = {"16chan18cls": "mindmap-fast", "model16chan18cls": "mindmap-fast"}
 CLASS_COUNTS = {"mindgrab": 2, "mindmap-fast": 18, "mindmap": 18, "mindsnap": 104}
 _LEGACY_HINTS = {
-    "subcortical": "Try 'mindmap' (24ch, 18-class) or 'mindmap-fast' (16ch, 18-class).",
-    "subcortical_mini": "Try 'mindmap-fast' (16ch, 18-class).",
+    "subcortical": "Try 'mindmap' (18-class) or 'mindmap-fast' (fast lightweight).",
+    "subcortical_mini": "Try 'mindmap-fast' (fast lightweight 18-class).",
     "tissue_fast": "Try 'mindmap-fast' (18-class) or 'mindmap' with --pve (GM/WM/CSF fractions).",
     "tissue": "Try 'mindmap' with --pve for GM/WM/CSF tissue fractions.",
-    "dkatlas": "Try 'mindsnap' (24ch, 104-class Desikan-Killiany parcellation).",
-    "aparc": "Try 'mindsnap' (24ch, 104-class Desikan-Killiany parcellation).",
+    "dkatlas": "Try 'mindsnap' (104-class Desikan-Killiany parcellation).",
+    "aparc": "Try 'mindsnap' (104-class Desikan-Killiany parcellation).",
 }
 
 
@@ -84,9 +84,9 @@ def validate_options(args, model_name):
 
 
 def command(args, model_name, executable, input_path, output_path):
-    """Translate the legacy CLI's output-space default into native flags."""
+    """Build native executable argv; input space is the default for all models."""
     cmd = [executable, "-o", output_path]
-    if model_name != "mindgrab" and not args.inverse_conform:
+    if model_name != "mindgrab" and args.save_conform:
         cmd.append("--save-conform")
     for name in ("ct", "comply", "export_classes", "pve", "no_turbo"):
         if getattr(args, name):

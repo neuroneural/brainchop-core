@@ -8,7 +8,7 @@
  *
  * It cost a large fraction of each executable and, more to the point, made
  * Homebrew's libomp a hard build dependency on macOS, since Apple ships no
- * OpenMP runtime. pthreads is in libSystem. CLAUDE.md's *Threading is pthreads
+ * OpenMP runtime. pthreads is in libSystem. the project's *Threading is pthreads
  * now* owns the measurements; none is restated here, because a byte count
  * beside code that changes is a byte count that goes stale -- this comment
  * carried three superseded figures before an audit caught them, and a fourth
@@ -41,7 +41,7 @@
  *
  *    Every caller today is the main thread, and no path introduces a second:
  *    the CLI is single-threaded, and the wasm modules and the Windows CUDA DLL
- *    compile the serial fallback below. See CLAUDE.md for why serializing whole
+ *    compile the serial fallback below. Note why serializing whole
  *    regions was rejected rather than merely skipped.
  *
  * 3. NO FORK once the pool exists. A forked child inherits pool.spawned counting

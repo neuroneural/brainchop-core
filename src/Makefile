@@ -40,7 +40,7 @@ LDFLAGS += -flto
 # question -- only a speed one.
 #
 # ZLIBNG_ROOT links a static zlib-ng instead, which is markedly faster at
-# DEFLATE (inflate is unaffected) and emits a slightly smaller file. CLAUDE.md's
+# DEFLATE (inflate is unaffected) and emits a slightly smaller file. project notes's
 # *Faster gzip, opt-in* OWNS the measurements and the size cost -- they are not
 # restated here, because that file says in as many words not to, and an audit
 # caught this block breaching that rule one commit after it was written.
@@ -340,7 +340,7 @@ endif
 # as already set. Override only when the value is make's own default, so an
 # explicit CC= on the command line or in the environment still wins.
 #
-# The OpenMP link probe that used to live here is gone; CLAUDE.md's *Compiler
+# The OpenMP link probe that used to live here is gone; the project's *Compiler
 # selection, and the CI break it caused* records what it was for and why
 # removing it was safe. It also changed which compiler Windows picks, which is
 # the part to know before editing this block.
@@ -457,7 +457,7 @@ endif
 
 # Threading is pthreads, not OpenMP, and the difference is mostly this block.
 #
-# What this replaced, and what dropping it was worth in bytes, is in CLAUDE.md's
+# What this replaced, and what dropping it was worth in bytes, is in the project's
 # *Threading is pthreads now*, which owns those figures -- they were restated
 # here and in bc_threads.h and went stale in both. The short version: macOS
 # needed Homebrew's libomp, so `git clone && make` did not work on a clean Mac,
@@ -813,12 +813,12 @@ wasm-browser-benchmark:
 # nothing and cost them cross-origin isolation.
 #
 # Threading obeys THREADS=0 like the native targets do, so the serial control
-# behind the patched-Nightly measurement in CLAUDE.md is `make wasm THREADS=0`
+# behind the patched-Nightly measurement in the build notes is `make wasm THREADS=0`
 # rather than a hand-assembled flag set.
 #
 # bc_threads.c compiles unchanged: it is plain POSIX, and resolve_count() falls
 # through to sysconf(_SC_NPROCESSORS_ONLN), which emscripten answers with
-# navigator.hardwareConcurrency. CLAUDE.md's *Threading* owns the figure.
+# navigator.hardwareConcurrency. the project's *Threading* owns the figure.
 #
 # -sPROXY_TO_PTHREAD is required rather than tuning: bc_parallel_for blocks on a
 # condition variable, and blocking is illegal on a browser main thread. It moves
@@ -1699,7 +1699,7 @@ ifeq ($(METAL),1)
 	./$(exe_mindmap) -backend metal --no-turbo -o $(BC_TMP)/bc-metal-mm-native.nii.gz $(TEST_2MM) --legacy-cleanup
 	python3 ../test/nii_diff.py $(TEST_MM_NATIVE) $(BC_TMP)/bc-metal-mm-native.nii.gz 256
 	# 104-way argmax: many more near-tied logit pairs than 18-way, hence the
-	# wider budgets. See CLAUDE.md's budget table for the measured counts.
+	# wider budgets. See the project's budget table for the measured counts.
 	./$(exe_mindsnap) -backend metal --no-turbo --save-conform -o $(BC_TMP)/bc-metal-ms.nii.gz $(TEST_IN)
 	python3 ../test/nii_diff.py $(TEST_MS) $(BC_TMP)/bc-metal-ms.nii.gz $(MS_TOL)
 	./$(exe_mindsnap) -backend metal --no-turbo -o $(BC_TMP)/bc-metal-ms-native.nii.gz $(TEST_2MM)
@@ -1770,7 +1770,7 @@ endif
 # 1024 for model16, as test-metal and test-wasm-gpu do.
 # The CUDA backend is fp16 as of the tensor-core work, so these are the FP16
 # budgets that test-metal and test-wasm-gpu already carry, not the fp32 ones
-# they replace (16 and 256). CLAUDE.md prescribed exactly this swap before the
+# they replace (16 and 256). the optimization pass prescribed exactly this swap before the
 # change was made. Measured on an RTX 4070 Ti SUPER, sm_89, tensor-core path:
 # MindGrab 36 of 16.7M against 64, model16 469 against 1024 -- 56% and 46% of
 # budget, comparable to Metal's 58%/64%.
@@ -1911,7 +1911,7 @@ endif
 #
 # Deliberately NOT part of `make test`. It runs every cell --repeats times, so
 # it takes minutes, and its timings are only meaningful on an otherwise-idle
-# machine -- CLAUDE.md records that background load inflates them ~2.5x. `make
+# machine -- benchmarking records that background load inflates them ~2.5x. `make
 # test` must stay a correctness gate that anyone can run at any time.
 #
 # benchmark-compare is the one to use in anger: it replays the matrix against a
@@ -1936,7 +1936,7 @@ benchmark-compare: models | $(BC_TMP)
 # `ubsan`'s neighbour in spirit -- those two pin THREADS=0 and therefore say
 # nothing whatever about threading.
 #
-# Both modes build and run inside ONE recipe -- see CLAUDE.md's sanitizer note
+# Both modes build and run inside ONE recipe -- see the project's sanitizer note
 # for why two invocations report a false green.
 #
 # The CONTROL is the load-bearing half. `race` plants an unsynchronised counter
@@ -1966,7 +1966,7 @@ benchmark-compare: models | $(BC_TMP)
 #
 # This does NOT compile the engine, only the pool: instrumenting a 256^3 MeshNet
 # runs for tens of minutes, which is why the real-workload TSan run recorded in
-# CLAUDE.md is a by-hand exercise and this is the repeatable gate.
+# manual checking is a by-hand exercise and this is the repeatable gate.
 #
 # The | $(BC_TMP) is not decoration: BC_TMP is build/tmp on Windows, which does
 # not exist in a clean tree, and every other target that writes there carries

@@ -176,7 +176,7 @@ float *bc_accel_normalize_input(const unsigned char *source) {
 	 * Worth doing because the host side of a GPU run stopped being noise: a
 	 * tuned CUDA run is ~1.08 s of which only ~0.35 s is on the GPU, and none
 	 * of the host stages had a single omp pragma while meshnet_cpu.c is
-	 * thoroughly parallel. CLAUDE.md's "conform is ~0.1%" was measured against
+	 * thoroughly parallel. the project's "conform is ~0.1%" was measured against
 	 * a 140 s CPU run.
 	 */
 	accel_normalize_args args = { .source = source, .normalized = normalized,

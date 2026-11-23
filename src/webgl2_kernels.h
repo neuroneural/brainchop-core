@@ -425,7 +425,7 @@
 
 /*
  * The variance is formed as E[x^2] - E[x]^2, the cancellation-prone way, which
- * is what the CPU, CUDA and the WGSL all do -- and which CLAUDE.md flags as the
+ * is what the CPU, CUDA and the WGSL all do -- and which the parity contract flags as the
  * standing suspect for OpenCL's looser tolerance, because OpenCL accumulates in
  * fp32 where CPU and CUDA use fp64. This is fp32 too, and has no f64 available.
  * The mitigation here is structural rather than a different formula: the three
@@ -455,7 +455,7 @@
 /*
  * GELU. Two different approximations, exactly as in meshnet_cpu.c and
  * webgpu_kernels.h, selected by the descriptor. They are NOT interchangeable:
- * each is what its upstream reference computes, and CLAUDE.md records that
+ * each is what its upstream reference computes, and benchmarking records that
  * CUDA and OpenCL once hardcoded one of them and silently ran the wrong
  * function for the other model. The #error is the point.
  */

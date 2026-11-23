@@ -4,7 +4,7 @@
 # still measure on an idle machine. macOS only (/usr/bin/time -l).
 # Time is reported, not gated (machine noise). Exits 1 if a Metal run's peak
 # footprint exceeds BC_PVE_PEAK_GB (default 4.0: Metal seg peak + host planes;
-# CLAUDE.md's Metal arena-release trap records why it is not the CPU's 3.912).
+# the project's Metal arena-release trap records why it is not the CPU's 3.912).
 # Usage: BC_PVE_SCANS=dir test/pve_bench.sh [rounds]   (repo root, after make models)
 set -eu
 exe=${BC_EXE:-src/brainchop-mindmap}

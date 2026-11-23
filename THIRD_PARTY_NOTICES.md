@@ -4,10 +4,12 @@
 
 niimath's `bwlabel.c` is Jesper Andersson's BSD-2-Clause port of
 `spm_bwlabel.c`. This repository does **not** contain that implementation:
-`src/bwlabel.c` is a separate queue-based 26-connected flood fill specialized
-to retaining one largest component. The Andersson notice is therefore not
-required for the current file. It must be restored if niimath's implementation
-is copied back in later.
+`src/bwlabel.c` is an independent queue-based flood-fill implementation
+covering both 26-connected largest-component retention (`bwlabel_largest`) and
+class-aware 6-connected hierarchical cleanup with neighbor relabeling
+(`bwlabel_cleanup18`, `bwlabel_cleanup104`). The Andersson notice is therefore
+not required for the current file. It must be restored if niimath's
+implementation is copied back in later.
 
 ## NIfTI I/O
 

@@ -1,6 +1,6 @@
-// Pure-JS WebGPU V4 segmentation and CAT-lite tissue fraction pipeline.
+// Pure-JS WebGPU V4 segmentation and continuous tissue-fraction (PVE) pipeline.
 // Runs conform, V4 ZYCX WebGPU inference (from src/models/*/model.bin),
-// connected-component cleanup / CAT-lite PVE fitting, and native-space
+// connected-component cleanup / partial-volume tissue fitting, and native-space
 // reslicing entirely in JS + WebGPU with zero WASM binaries.
 
 import { BrainchopError } from '../error.js'
@@ -662,7 +662,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
         calMin: 0,
         calMax: 0,
         intentCode: NIFTI_INTENT_LABEL,
-        descrip: '6.0.5',
+        descrip: `brainchop ${canonical} webgpu`,
       })
     }
 
@@ -681,7 +681,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       datatypeCode: orig.header.datatypeCode,
       sclSlope: 1,
       sclInter: 0,
-      descrip: '6.0.5',
+      descrip: `brainchop ${canonical} webgpu`,
     })
 
     const elapsedMs = performance.now() - started
@@ -773,7 +773,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 0,
       intentCode: NIFTI_INTENT_LABEL,
-      descrip: '6.0.5',
+      descrip: `brainchop ${canonical} webgpu`,
     })
   } else {
     if (!isValidAffine4x4(orig.header.stoXyz)) {
@@ -806,7 +806,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 0,
       intentCode: NIFTI_INTENT_LABEL,
-      descrip: '6.0.5',
+      descrip: `brainchop ${canonical} webgpu`,
     })
   }
 
@@ -816,7 +816,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
 }
 
 /**
- * Execute continuous GM/WM/CSF/Brain tissue fraction estimation (CAT-lite PVE)
+ * Execute continuous GM/WM/CSF/Brain partial-volume tissue fraction estimation
  * on pure-JS WebGPU V4.
  */
 export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<WebGpuTissuesResult> {
@@ -904,7 +904,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   })
 
   if (outputs.length !== 3) {
-    const msg = `brainchopc: CAT-lite expected 3 tissue priors, got ${outputs.length}`
+    const msg = `brainchopc: PVE expected 3 tissue priors, got ${outputs.length}`
     record(msg)
     throw new BrainchopError('inference-failed', msg, log)
   }
@@ -916,8 +916,8 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   validateNonZeroFloat32(priors[1], 'WM', log, record)
   validateNonZeroFloat32(priors[2], 'CSF', log, record)
 
-  // 5. CAT-lite partial-volume fitting
-  reportProgress('postprocess', 0.85, { message: 'Fitting CAT-lite partial-volume tissues' })
+  // 5. Partial-volume tissue fitting
+  reportProgress('postprocess', 0.85, { message: 'Fitting partial-volume tissues' })
   const { tissues, stats } = applyCatLitePartialVolume(
     priors,
     catLiteIntensity,
@@ -926,11 +926,11 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   )
   if (stats.applied && stats.tissueMeans && stats.tissueSigmas) {
     record(
-      `[CAT-lite] means CSF=${stats.tissueMeans.csf.toFixed(3)} GM=${stats.tissueMeans.gray.toFixed(3)} WM=${stats.tissueMeans.white.toFixed(3)}; ` +
+      `[PVE] means CSF=${stats.tissueMeans.csf.toFixed(3)} GM=${stats.tissueMeans.gray.toFixed(3)} WM=${stats.tissueMeans.white.toFixed(3)}; ` +
       `sigmas CSF=${stats.tissueSigmas.csf.toFixed(3)} GM=${stats.tissueSigmas.gray.toFixed(3)} WM=${stats.tissueSigmas.white.toFixed(3)}`,
     )
   } else if (!stats.applied) {
-    record(`[CAT-lite] skipped: ${stats.reason ?? 'unknown'}`)
+    record(`[PVE] skipped: ${stats.reason ?? 'unknown'}`)
   }
 
   const [gmMap, wmMap, csfMap] = tissues
@@ -969,7 +969,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
         calMin: 0,
         calMax: 1,
         intentCode: NIFTI_INTENT_NONE,
-        descrip: '6.0.5',
+        descrip: `brainchop ${canonical} webgpu pve`,
       })
     }
     const quantU8 = sameGrid
@@ -993,7 +993,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
       calMin: 0,
       calMax: 1,
       intentCode: NIFTI_INTENT_NONE,
-      descrip: '6.0.5',
+      descrip: `brainchop ${canonical} webgpu pve`,
     })
   }
 

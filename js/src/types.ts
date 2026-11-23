@@ -179,7 +179,7 @@ export type TissueOptions = Omit<SegmentOptions, 'model' | 'mask' | 'borderMm' |
 }
 export interface TissueMaps {
   gm: ArrayBuffer; wm: ArrayBuffer; csf: ArrayBuffer
-  /** GM + WM: its 0.5 isosurface is a sub-voxel pial surface. */
+  /** GM + WM combined continuous tissue fraction map (experimental). */
   brain: ArrayBuffer
 }
 export interface TissueResult {

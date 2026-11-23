@@ -253,21 +253,11 @@ Validated on `gfx1151`. No other AMD architecture is promoted.
 ## Compatibility tests and harness cleanup
 
 The bounded contract is mandatory when the packaged entry is `bc_hip_classify`.
-Legacy full-head artifacts remain valid upgrade inputs at every class count,
-including PR #34's 104-class artifact.
+Legacy full-head artifacts remain valid upgrade inputs at every class count.
 The bounded verifier also checks interior arena compaction and rejects private
 memory/register spills in the fused head as a promotion guard. Schema-1
 `readwrite` annotations on the final producer and head inputs are normalized
 when upgrading to schema 2 without changing code objects or launch geometry.
-
-`test/hip_pr34_reuse.tar.gz` freezes PR #34's original manifest, bundle, and
-source/descriptor snapshots at `102254f166bf4abb28096851e896e097e4ce6d74`.
-Its original model.bin is reused from the repository and checked against the
-original source hash. Archived Python files are hashed for provenance and never
-executed. The GPU-free regression verifies the original artifact, replaces its
-tail using the checked-in compiled head, and reproduces the promoted binary,
-catalog, dispatches, weights and buffer sizes exactly. It needs no Git history,
-network, ROCm compiler, GPU or ML package.
 
 The native harness checks the adapter listing, invalid adapter refusal without
 output, and all four PVE maps (`gm`, `wm`, `csf`, `brain`). Each timed inference

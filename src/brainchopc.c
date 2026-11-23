@@ -38,7 +38,7 @@
  *
  * The GPU backends each carry a stage profiler (BRAINCHOPC_CUDA_PROFILE and
  * friends) and the host side carried none, which was fine while the host side
- * was noise: CLAUDE.md's percentages were measured against a 140 s CPU run,
+ * was noise: the project's percentages were measured against a 140 s CPU run,
  * where conform was ~0.1% and gzip "within noise".
  *
  * That stopped being true. A tuned CUDA run is ~1.08 s of which only ~0.35 s is
@@ -296,8 +296,19 @@ static nifti_image *copy_header(const nifti_image *source) {
 	return copy;
 }
 
+static void format_provenance_descrip(char descrip[80],
+		const char *backend_name, int no_turbo) {
+	const char *model_name =
+		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" : BC_MODEL_NAME;
+	memset(descrip, 0, 80);
+	snprintf(descrip, 80, "brainchop %s %s %s %s",
+		BC_VERSION, model_name,
+		backend_name ? backend_name : "unknown",
+		no_turbo ? "exact" : "turbo");
+}
+
 static int write_float_image(const nifti_image *reference, const float *values,
-		const char *path) {
+		const char *path, const char *backend_name, int no_turbo) {
 	nifti_image *image=copy_header(reference);
 	if(!image)return 1;
 	image->data=(void *)values;
@@ -308,8 +319,7 @@ static int write_float_image(const nifti_image *reference, const float *values,
 	image->intent_code=NIFTI_INTENT_NONE;
 	image->intent_p1=image->intent_p2=image->intent_p3=0.0;
 	memset(image->intent_name,0,sizeof(image->intent_name));
-	memset(image->descrip,0,sizeof(image->descrip));
-	memcpy(image->descrip,"6.0.5",5);
+	format_provenance_descrip(image->descrip,backend_name,no_turbo);
 	int failed=nifti_set_filenames(image,path,0,1)||nifti_image_write_status(image);
 	image->data=NULL;
 	nifti_image_free(image);
@@ -320,6 +330,8 @@ static int write_float_image(const nifti_image *reference, const float *values,
 typedef struct {
 	const nifti_image *reference;
 	const char *output;
+	const char *backend_name;
+	int no_turbo;
 } class_output_context;
 
 static int write_class(int class_index, const float *values, size_t count,
@@ -338,13 +350,14 @@ static int write_class(int class_index, const float *values, size_t count,
 	else if(length>=4&&!strcmp(base+length-4,".nii")){base[length-4]=0;suffix=".nii";}
 	if(snprintf(path,sizeof(path),"%s_c%d%s",base,class_index,suffix)>=(int)sizeof(path))
 		return 1;
-	if(write_float_image(context->reference,values,path))return 1;
+	if(write_float_image(context->reference,values,path,
+			context->backend_name,context->no_turbo))return 1;
 	fprintf(stderr,"brainchop :: Saved %s\n",path);
 	return 0;
 }
 
 static int write_mask(const nifti_image *reference, const float *values,
-		const char *path) {
+		const char *path, const char *backend_name, int no_turbo) {
 	nifti_image *mask=copy_header(reference);
 	if(!mask)return 1;
 	unsigned char *data=nii_malloc((size_t)reference->nvox,1);
@@ -360,8 +373,7 @@ static int write_mask(const nifti_image *reference, const float *values,
 	mask->intent_code=NIFTI_INTENT_LABEL;
 	mask->intent_p1=mask->intent_p2=mask->intent_p3=0.0;
 	memset(mask->intent_name,0,sizeof(mask->intent_name));
-	memset(mask->descrip,0,sizeof(mask->descrip));
-	memcpy(mask->descrip,"6.0.5",5);
+	format_provenance_descrip(mask->descrip,backend_name,no_turbo);
 	int failed=nifti_set_filenames(mask,path,0,1)||nifti_image_write_status(mask);
 	nifti_image_free(mask);
 	if(failed)fprintf(stderr,"brainchopc: unable to write %s\n",path);
@@ -382,7 +394,7 @@ static int write_mask(const nifti_image *reference, const float *values,
  */
 static int write_fraction(const nifti_image *conformed, const nifti_image *original,
 		const float *values, const char *output, const char *tissue,
-		int save_conform) {
+		int save_conform, const char *backend_name, int no_turbo) {
 	char base[4096],path[4096];
 	size_t length=strlen(output);
 	if(length>=sizeof(base))return 1;
@@ -435,8 +447,7 @@ static int write_fraction(const nifti_image *conformed, const nifti_image *origi
 	image->intent_code=NIFTI_INTENT_NONE;
 	image->intent_p1=image->intent_p2=image->intent_p3=0.0;
 	memset(image->intent_name,0,sizeof(image->intent_name));
-	memset(image->descrip,0,sizeof(image->descrip));
-	memcpy(image->descrip,"6.0.5",5);
+	format_provenance_descrip(image->descrip,backend_name,no_turbo);
 	int failed=nifti_set_filenames(image,path,0,1)||nifti_image_write_status(image);
 	nifti_image_free(image);
 	if(failed)fprintf(stderr,"brainchopc: unable to write %s\n",path);
@@ -470,8 +481,10 @@ static int segment_checked(const bc_backend *backend, const nifti_image *image,
 
 static int run_model(nifti_image *original, int input_datatype,
 		int mindgrab_output, const float *weights, const bc_backend *backend,
-		int allow_fallback, const bc_cli_options *cli, nifti_image **output) {
+		int allow_fallback, const bc_cli_options *cli, nifti_image **output,
+		const char **used_backend) {
 	*output=NULL;
+	if(used_backend)*used_backend=backend?backend->name:NULL;
 	bc_stage(NULL);
 	nifti_image *conformed=private_float_copy(original);
 	if (!conformed) return 1;
@@ -512,7 +525,7 @@ static int run_model(nifti_image *original, int input_datatype,
 		inference.y_low=box.y_low; inference.y_high=box.y_high;
 		inference.z_low=box.z_low; inference.z_high=box.z_high;
 	}
-	class_output_context class_context={conformed,cli->output};
+	class_output_context class_context={conformed,cli->output,backend->name,cli->no_turbo};
 	if(cli->export_classes) {
 		inference.class_writer=write_class;
 		inference.class_writer_context=&class_context;
@@ -535,12 +548,16 @@ static int run_model(nifti_image *original, int input_datatype,
 	}
 #endif
 	bc_stage("to uint8 + setup");
-	if(!failed) failed=segment_checked(backend,conformed,result,weights,&inference);
+	const bc_backend *effective_backend=backend;
+	if(!failed) failed=segment_checked(effective_backend,conformed,result,weights,&inference);
 	bc_stage("segment (incl GPU)");
-	if(failed && allow_fallback && backend!=&bc_cpu_backend) {
-		fprintf(stderr,"brainchopc: %s backend failed; falling back to CPU\n",backend->name);
-		failed=segment_checked(&bc_cpu_backend,conformed,result,weights,&inference);
+	if(failed && allow_fallback && effective_backend!=&bc_cpu_backend) {
+		fprintf(stderr,"brainchopc: %s backend failed; falling back to CPU\n",effective_backend->name);
+		effective_backend=&bc_cpu_backend;
+		class_context.backend_name=effective_backend->name;
+		failed=segment_checked(effective_backend,conformed,result,weights,&inference);
 	}
+	if(used_backend)*used_backend=effective_backend->name;
 	if (failed) {
 #if BC_HAS_PVE
 		free(planes);
@@ -588,14 +605,13 @@ static int run_model(nifti_image *original, int input_datatype,
 		for(int i=0;i<3&&!pve_failed;i++)
 			pve_failed=write_fraction(conformed,original,
 				planes+(size_t)i*conformed->nvox,cli->output,tissue[i],
-				cli->save_conform);
-		/* brain = GM + WM, summed in place after GM is written: its 0.5
-		   isosurface is a sub-voxel pial surface, the one a host meshes. */
+				cli->save_conform,effective_backend->name,cli->no_turbo);
+		/* brain = GM + WM combined continuous tissue fraction map, summed in place. */
 		for(size_t v=0;v<(size_t)conformed->nvox&&!pve_failed;v++)
 			planes[v]+=planes[(size_t)conformed->nvox+v];
 		if(!pve_failed)
 			pve_failed=write_fraction(conformed,original,planes,cli->output,
-				"brain",cli->save_conform);
+				"brain",cli->save_conform,effective_backend->name,cli->no_turbo);
 		bc_stage("pve write");
 		free(planes);free(result);nifti_image_free(conformed);
 		return pve_failed;
@@ -647,7 +663,8 @@ static int run_model(nifti_image *original, int input_datatype,
 			nifti_image_free(conformed);return 1;
 		}
 		float *img=original->data,*resliced=conformed->data;
-		if(cli->mask_output&&write_mask(original,resliced,cli->mask_output)) {
+		if(cli->mask_output&&write_mask(original,resliced,cli->mask_output,
+				effective_backend->name,cli->no_turbo)) {
 			nifti_image_free(conformed);return 1;
 		}
 		float mn=INFINITY;
@@ -804,9 +821,10 @@ int main(int argc, char **argv) {
 		free(weights);nifti_image_free(nim);return 1;
 	}
 	nifti_image *output=NULL;
+	const char *used_backend=backend->name;
 	if (brainchopc_convert(nim,DT_FLOAT32) || sanitize_input(nim,input_datatype) ||
 	    run_model(nim,input_datatype,mindgrab_output,weights,backend,automatic_backend,
-			&cli,&output)) {
+			&cli,&output,&used_backend)) {
 		free(weights);nifti_image_free(nim); return 1;
 	}
 	free(weights);
@@ -823,8 +841,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr,"brainchop :: Done!\n");
 		return 0;
 	}
-	memset(output->descrip,0,sizeof(output->descrip));
-	memcpy(output->descrip,"6.0.5",5); /* niimath's NIfTI output provenance */
+	format_provenance_descrip(output->descrip,used_backend,cli.no_turbo);
 	if (nifti_set_filenames(output,cli.output,0,1) ||
 	    nifti_image_write_status(output)) {
 		fprintf(stderr,"brainchopc: unable to write %s\n",cli.output);

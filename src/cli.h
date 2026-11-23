@@ -28,7 +28,7 @@ typedef struct {
 	int legacy_cleanup; /* Label models: original 26-connected binary LCC. */
 #if BC_HAS_PVE
 	/*
-	 * --pve: write continuous CAT-lite GM/WM/CSF tissue fractions instead of a
+	 * --pve: write continuous GM/WM/CSF tissue fractions instead of a
 	 * label volume. CPU/GPU tissue-prior backends, and rejected at parse time
 	 * against anything it contradicts rather than resolved downstream.
 	 */
@@ -53,7 +53,7 @@ typedef struct {
  * This fact previously had two owners: cli.c gated the --tune flag on
  * `defined(HAVE_CUDA)` while brainchopc.c independently tested
  * `strcmp(backend->name, "cuda")` to decide whether to warn. Adding OpenCL to
- * only the first -- which cli.c's own comment invites, and which CLAUDE.md
+ * only the first -- which cli.c's own comment invites, and which this design
  * names as the next task -- would accept the flag, tune correctly, and THEN
  * print that it had no effect. Both live here so they move together.
  */

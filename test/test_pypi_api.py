@@ -132,7 +132,7 @@ class BrainchopApiTests(unittest.TestCase):
             self.assertIsInstance(res, Volume)
             self.assertEqual(res.shape, (4, 5, 6))
             cmd = captured_cmds[-1]
-            self.assertIn("--save-conform", cmd)
+            self.assertNotIn("--save-conform", cmd)
             self.assertIn("--ct", cmd)
             self.assertIn("--no-turbo", cmd)
             self.assertEqual(cmd[cmd.index("-cpu") + 1], "4")
@@ -144,10 +144,15 @@ class BrainchopApiTests(unittest.TestCase):
             # NIFTI_INTENT_LABEL (1002) is tagged on label outputs
             self.assertEqual(struct.unpack_from("<h", saved, 68)[0], 1002)
 
-            # Direct path + inverse_conform + alias
-            res2 = segment(self.in_nii, "16chan18cls", inverse_conform=True)
-            self.assertNotIn("--save-conform", captured_cmds[-1])
+            # Direct path + save_conform=True + alias
+            res2 = segment(self.in_nii, "16chan18cls", save_conform=True)
+            self.assertIn("--save-conform", captured_cmds[-1])
             self.assertIsInstance(res2, Volume)
+
+            # Backward-compatible inverse_conform=True still yields native output
+            res3 = segment(self.in_nii, "16chan18cls", inverse_conform=True)
+            self.assertNotIn("--save-conform", captured_cmds[-1])
+            self.assertIsInstance(res3, Volume)
 
             # Batch input returns list
             batch_res = segment([self.in_gz, self.in_nii], "mindmap")

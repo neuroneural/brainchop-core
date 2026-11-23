@@ -6,103 +6,82 @@
 
 # @brainchop/core
 
-Browser MeshNet brain segmentation on pure-JS WebGPU V4, with WebGL2 and
-threaded-CPU WASM fallbacks: MindGrab skull stripping (`mindgrab`), 18-class
-parcellation at two widths (`mindmap-fast` / alias `16chan18cls`, `mindmap`),
-and a 104-class Desikan-Killiany parcellation (`mindsnap`), over a fixed 256³
-grid. A NIfTI `ArrayBuffer` goes in and a NIfTI `ArrayBuffer` comes out.
+In-browser 3D MRI brain segmentation and skull stripping powered by WebGPU,
+with automatic WebGL2 and multi-threaded WebAssembly CPU fallbacks. Pass a
+NIfTI `.nii` / `.nii.gz` `ArrayBuffer` in, and get a segmented NIfTI
+`ArrayBuffer` out — entirely on the client device with zero server uploads.
 
-On **WebGPU**, the entire pipeline — NIfTI-1 I/O, coil-flare-safe conform
-(`fHigh = 0.98`), normalization, the 13 or 25 MeshNet layers (ZYCX split-plane
-u8x4 V4 kernels with optional `shader-f16` + automatic `f32` fallback, flexible
-subgroups, and automatic `LowMem128` + paced Z-chunking), connected-component
-cleanup / CAT-lite tissue fitting, and native-space reslicing — runs in **pure
-JavaScript + WGSL** reading `models/<name>.bin` directly with **zero WebGPU WASM
-binaries**. WebGL2 and threaded CPU remain available as Emscripten WASM
-fallbacks compiled from [brainchop-core](https://github.com/neuroneural/brainchop-core).
+- **Web App:** [brainchop.org](https://brainchop.org)
+- **Model cards, validation metrics & weight SHA-256 checksums:** [BrainChop Core README](https://github.com/neuroneural/brainchop-core#embedded-models--model-cards)
+- **Intended use:** Research and educational use; not cleared as a medical device for clinical diagnosis.
 
 ```js
 import { segment } from '@brainchop/core'
 
 const input = await file.arrayBuffer()          // .nii or .nii.gz
-const { image, elapsedMs } = await segment(input, {
-  model: 'mindgrab',
+const { image, backend, elapsedMs } = await segment(input, {
+  model: 'mindmap',
   worker: true,
-  onProgress: ({ stage, progress, layer, totalLayers }) => {
-    console.log(stage, Math.round(progress * 100) + '%', layer ? `${layer}/${totalLayers}` : '')
+  onProgress: ({ stage, progress }) => {
+    console.log(stage, Math.round(progress * 100) + '%')
   },
 })
-// image is gzipped if the input was
+// Output preserves input geometry and gzip encoding by default.
 ```
 
-MindMap and MindMap-Fast filter selected tissue classes and refill suppressed
-speckles from surviving neighboring labels by default. Use
-`{ model: 'mindmap', legacyCleanup: true }` for the original whole-brain-only
-cleanup.
+## Models
 
-Categorical native-space output uses adaptive center-outward midpoint majority
-voting, including background votes outside the source and centermost tie
-breaking. Masks use nearest neighbor; continuous tissue maps use trilinear
-resampling. Invalid, empty, more than 95% filled, or excessively fragmented
-categorical results fail with `inference-failed` before cleanup can disguise the
-failure.
+| `model` | Description | Output |
+| --- | --- | --- |
+| `'mindgrab'` | Modality-agnostic skull stripping (T1, T2, FLAIR, DWI, CT, etc.) | input image with non-brain voxels floored (optional binary `mask`) |
+| `'mindmap'` | Primary 18-class cortical and subcortical segmentation | label volume (or tissue fractions via `segmentTissues`) |
+| `'mindsnap'` | 104-class Desikan-Killiany cortical + subcortical parcellation | label volume |
+| `'mindmap-fast'` | Fast lightweight 18-class segmentation (`'16chan18cls'` alias) | label volume |
 
-## Continuous tissue maps
+Each `MODELS` entry (and `listModels()`) carries `colormap`: `{ R, G, B, labels }`,
+ready for viewers such as NiiVue.
+
+`mindmap` and `mindmap-fast` apply class-aware connected-component cleanup with
+neighboring-label refill by default. Pass `{ legacyCleanup: true }` for the
+original whole-brain-only 26-connected cleanup. Categorical outputs reslice to
+the native input grid via midpoint majority voting; masks use nearest-neighbor
+resampling; continuous tissue maps use trilinear resampling. Invalid, empty, or
+severely fragmented categorical outputs fail explicitly with `inference-failed`.
+
+## Continuous tissue maps (experimental)
 
 ```js
 import { segmentTissues } from '@brainchop/core'
 
 const { tissues, backend } = await segmentTissues(input, {
-  model: 'mindmap', worker: true,
+  model: 'mindmap',
+  worker: true,
 })
 // tissues.gm, tissues.wm, tissues.csf and tissues.brain (GM + WM) are NIfTI
 // ArrayBuffers. Native geometry and input gzip encoding are preserved by default.
 ```
 
-`tissues.brain`'s 0.5 isosurface is a sub-voxel pial surface, ready to mesh.
+`segmentTissues` computes experimental GM/WM/CSF/Brain partial-volume tissue
+fractions from `mindmap` (or `mindmap-fast` / `'16chan18cls'`) across WebGPU,
+WebGL2, and CPU. `saveConform`, `gzipOutput`, `onProgress`, and `webgpuMode`
+work as for `segment`; mask, border, and legacy categorical cleanup options are
+refused.
 
-`segmentTissues` supports `mindmap` and `mindmap-fast` (or legacy alias
-`16chan18cls`) on WebGPU, WebGL2 and CPU. The GPU paths compute grouped priors,
-separable Gaussian blur and brain-support gating on the device, followed by the
-CAT-lite mixed-class partial-volume fitter. `saveConform`, `gzipOutput`,
-`onProgress`, and `webgpuMode` work as for `segment`; mask, border and legacy
-categorical cleanup options are refused.
+## Backends & Requirements
 
-## Backends
+`auto` (the default) selects hardware `webgpu`, then hardware `webgl2`, then
+multi-threaded `cpu` (on cross-origin isolated pages), reports the backend that
+ran in `result.backend` (and stamps it into the output NIfTI `descrip` header),
+and throws `no-webgpu` if none are available. Software rasterisers (SwiftShader,
+llvmpipe, lavapipe, WARP, fallback adapters) are never selected automatically.
 
-`auto` (the default) tries hardware `webgpu`, hardware `webgl2`, then `cpu`
-(cross-origin isolated pages only), reports which one ran in `result.backend`,
-and throws `no-webgpu` if none can. It never picks a software rasteriser
-(SwiftShader, llvmpipe, lavapipe, WARP, or a WebGPU fallback adapter).
-
-### Pure-JS WebGPU V4 auto-detection
-
-The WebGPU V4 engine requires **no `-gpu.wasm` binaries** and automatically
-adapts to device capabilities via a 3-layer compatibility system:
-
-1. **Zero-overhead hardware hints:** Apple Silicon uses the fast single-encoder
-   path; known shared-RAM iGPUs (Windows Intel UHD/Iris, Linux Mesa Intel Gen9)
-   and `<= 128 MiB` storage-buffer devices (e.g. mobile WebGPU) automatically
-   select `LowMem128` (max single buffer `<= 80 MiB` for 15/16ch, `<= 120 MiB`
-   for 24ch) + paced Z-chunking.
-2. **Self-calibrating micro-probe:** Unrecognized or masked GPUs run a brief
-   13.5 MiB calibration probe (cached for 30 days) to choose `std + pipelined`,
-   `std + paced`, or `LowMem128 + paced`.
-3. **Single safe-mode retry:** If an un-paced run hits `device.lost` or OOM,
-   safe mode is persisted and the run is retried once in `LowMem128 + paced`.
-
-Feature tiers degrade gracefully with no hard `shader-f16` requirement:
-- **Tier 1:** `shader-f16` + `subgroups` (`sg32`, `sg64`, `sg32_64`, `sg_small`)
-- **Tier 2:** `shader-f16` without `subgroups` (shared-memory epilogue)
-- **Tier 3:** `f32` fallback when `shader-f16` is absent
-
-| backend | needs | artifacts |
+| Backend | Requirements | Assets loaded |
 | --- | --- | --- |
-| `'webgpu'` | WebGPU with `>= 128 MiB` storage buffers, secure context (`shader-f16` & `subgroups` optional) | pure JS + `models/<name>.bin` (340–790 KiB) |
-| `'webgl2'` | WebGL2 with `EXT_color_buffer_float` (blocks calling thread — use `worker: true`) | `brainchop-<name>-gl.{js,wasm}` |
-| `'cpu'` | **cross-origin isolated** page (`COOP`/`COEP`) and growable shared memory | `brainchop-<name>.{js,wasm}` |
+| `'webgpu'` | WebGPU (`>= 128 MiB` storage buffers), secure context (`https` or `localhost`) | pure JS + `models/<name>.bin` (340–790 KiB; zero WebGPU WASM) |
+| `'webgl2'` | WebGL2 with `EXT_color_buffer_float` (use `worker: true` to keep UI responsive) | `brainchop-<name>-gl.{js,wasm}` |
+| `'cpu'` | Cross-origin isolated page (`COOP`/`COEP` headers) + shared memory | `brainchop-<name>.{js,wasm}` |
 
-### The CPU fallback needs two headers
+### Enabling the multi-threaded CPU fallback
 
 Serve the **top-level document** with:
 
@@ -112,37 +91,40 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 ```js
-import { checkCpuSupport } from '@brainchop/core'
+import { checkSupport, checkCpuSupport } from '@brainchop/core'
+
+const report = await checkSupport()
+if (!report.supported) console.warn(report.reasons.join('\n'))
 
 const cpu = checkCpuSupport()
 if (!cpu.supported) console.warn(cpu.reasons.join('\n'))
 ```
 
-## Requirements
+<details>
+<summary>WebGPU implementation details (auto-detection, low-memory mode &amp; precision tiers)</summary>
 
-For the WebGPU path: WebGPU with `maxStorageBufferBindingSize` and
-`maxBufferSize` of at least **128 MiB** and a **secure context** (`https` or
-`localhost`). `shader-f16` and `subgroups` are automatically used when present
-and gracefully skipped otherwise.
+On WebGPU, the entire pipeline (NIfTI-1 I/O, conform with `fHigh = 0.98`,
+quantile normalization, 3D MeshNet WGSL inference, cleanup / PVE fitting, and
+native-space reslicing) runs in pure JavaScript + WGSL directly from
+`models/<name>.bin`.
 
-```js
-import { checkSupport } from '@brainchop/core'
+Device adaptation uses three layers:
+1. **Hardware hints:** Apple Silicon uses the single-encoder path; known
+   shared-RAM iGPUs and `<= 128 MiB` storage-buffer devices (such as mobile
+   WebGPU) select `LowMem128` (max single buffer `<= 80 MiB` for 15/16ch,
+   `<= 120 MiB` for 24ch) with paced Z-chunking.
+2. **Calibration probe:** Unrecognized GPUs run a brief 13.5 MiB micro-probe
+   (cached for 30 days) to choose standard pipelined, standard paced, or
+   `LowMem128` paced execution.
+3. **Safe-mode retry:** If an un-paced run hits `device.lost` or OOM, safe mode
+   is cached and the run retries once in `LowMem128` paced mode.
 
-const report = await checkSupport()
-if (!report.supported) console.warn(report.reasons.join('\n'))
-```
+Precision tiers degrade automatically with no hard `shader-f16` requirement:
+- **Tier 1:** `shader-f16` + `subgroups`
+- **Tier 2:** `shader-f16` without `subgroups` (shared-memory epilogue)
+- **Tier 3:** `f32` fallback when `shader-f16` is unavailable
 
-## Models
-
-| `model` | does | output |
-| --- | --- | --- |
-| `'mindgrab'` | skull stripping in any modality | input image with non-brain voxels floored |
-| `'mindmap-fast'` | 18-class brain segmentation (16-channel, MindMap-Fast v3.5; `'16chan18cls'` kept as alias) | label volume |
-| `'mindmap'` | 18-class brain segmentation (24-channel, MindMap-18 v4.0 Gold) | label volume |
-| `'mindsnap'` | 104-class Desikan-Killiany parcellation (24-channel, MindSnap-104 v4.0 Gold) | label volume |
-
-Each `MODELS` entry (and `listModels()`) carries `colormap`: `{ R, G, B, labels }`,
-ready for viewers such as NiiVue (`nv.setColormapLabel(1, MODELS.mindsnap.colormap)`).
+</details>
 
 ## Options
 
@@ -150,33 +132,32 @@ ready for viewers such as NiiVue (`nv.setColormapLabel(1, MODELS.mindsnap.colorm
 segment(input: ArrayBuffer | ArrayBufferView, options: SegmentOptions)
 ```
 
-| option | models | meaning |
+| Option | Models | Meaning |
 | --- | --- | --- |
-| `model` | all | **required**: `'mindgrab'`, `'mindmap-fast'` (or alias `'16chan18cls'`), `'mindmap'`, `'mindsnap'` |
+| `model` | all | **required**: `'mindgrab'`, `'mindmap'`, `'mindsnap'`, `'mindmap-fast'` (or alias `'16chan18cls'`) |
 | `ct` | all | input is CT; convert Hounsfield to Cormack units |
 | `comply` | all | insert the compliance transform before conform |
-| `saveConform` | label models | return the conformed 256³ volume instead of reslicing to the input grid |
+| `saveConform` | label/PVE models | return the conformed 256³ volume instead of reslicing to the input grid |
 | `legacyCleanup` | label models | restore whole-brain 26-connected cleanup without per-class refill |
 | `mask` | `mindgrab` | also return a binary brain mask in `result.mask` |
 | `borderMm` | `mindgrab` | grow the mask border, in mm; implies `mask` |
-| `gzipOutput` | all | override the default, which matches the input |
+| `gzipOutput` | all | override gzip compression (defaults to matching input) |
 | `backend` | all | `'auto'` (default), `'webgpu'`, `'webgl2'`, `'cpu'` |
-| `webgpuMode` | all | WebGPU V4 layout/pacing override: `'auto'` (default), `'standard'`, `'low-memory'`, `'recalibrate'` |
-| `worker` | all | run the whole segmentation in a Web Worker (**recommended**) |
-| `device` | all | reuse a `GPUDevice` you already own (implies `webgpu`) |
-| `glContext` | all | reuse a `WebGL2RenderingContext` you already own (implies `webgl2`) |
+| `webgpuMode` | all | WebGPU execution override: `'auto'` (default), `'standard'`, `'low-memory'`, `'recalibrate'` |
+| `worker` | all | run segmentation in a Web Worker (**recommended**) |
+| `device` | all | reuse an existing `GPUDevice` (implies `webgpu`) |
+| `glContext` | all | reuse an existing `WebGL2RenderingContext` (implies `webgl2`) |
 | `assetPath` | all | base URL for worker, `models/<name>.bin`, and fallback `.js`/`.wasm` when self-hosting `dist/` |
 | `timeoutMs` | all | inference limit (default 120000; 900000 for `cpu` or `auto` in a worker) |
 | `onLog` | all | receives diagnostic log lines |
 | `onProgress` | all | receives monotonic `{ stage, progress, layer?, totalLayers?, message? }` updates |
 
-Output is in the **input image's own space by default**, for every model.
+Output is in the **input image's own space by default** for every model.
 
 ### Bundlers & per-model subpaths
 
-No copying and no `assetPath` are required with Vite, Rollup, or webpack: the
-worker, `models/<name>.bin`, and fallback glue are referenced with literal
-`new URL(..., import.meta.url)` and `import(...)` specifiers. Vite needs:
+Vite, Rollup, and webpack bundle assets automatically with no manual file
+copying or `assetPath`. Vite needs:
 
 ```js
 // vite.config.js
@@ -189,7 +170,7 @@ export default {
 To deploy only one model's assets, import its subpath entrypoint:
 
 ```js
-import { segment } from '@brainchop/core/mindgrab'      // or /mindmap-fast, /16chan18cls, /mindmap, /mindsnap
+import { segment } from '@brainchop/core/mindgrab'      // or /mindmap, /mindsnap, /mindmap-fast, /16chan18cls
 ```
 
 ## Errors
@@ -202,10 +183,10 @@ Every package error throws a `BrainchopError` with a machine-readable `code`:
 
 ```sh
 npm install
-npm run build:webgpu                 # stage models/*.bin, emit types, bundle (no emcc needed!)
+npm run build:webgpu                 # stage models/*.bin, emit types, bundle (no emcc needed)
 npm run makeWasm && npm run build    # full build including WebGL2 + CPU WASM fallbacks (needs emcc)
-npm run test:unit                    # Node unit tests (parseModelBin parity, NIfTI, gpu-compat, conform/bwlabels/reslice)
-npm test                             # real-browser end-to-end tests (needs playwright via BC_PLAYWRIGHT_ROOT)
+npm run test:unit                    # Node unit tests
+npm test                             # real-browser end-to-end tests
 ```
 
 ## Citation
@@ -216,4 +197,4 @@ If you use `@brainchop/core` in published research, please cite the relevant pap
 2. **BrainChop Edge Ecosystem:** Plis, S. M., Masoud, M., Hu, F., Hanayik, T., Ghosh, S. S., Drake, C., Newman-Norlund, R., & Rorden, C. (2024). *Brainchop: Providing an edge ecosystem for deployment of neuroimaging artificial intelligence models.* **Aperture Neuro**, 4. [DOI: 10.52294/001c.123059](https://doi.org/10.52294/001c.123059)
 3. **Original BrainChop Software Paper:** Masoud, M., Hu, F., & Plis, S. (2023). *Brainchop: In-browser MRI volumetric segmentation and rendering.* **Journal of Open Source Software**, 8(83), 5098. [DOI: 10.21105/joss.05098](https://doi.org/10.21105/joss.05098)
 
-*(Full BibTeX entries are in the [BrainChop Core README](https://github.com/neuroneural/brainchop-core#citation); citations for the v4.0 MindMap and MindSnap models will be added upon publication.)*
+*(Full BibTeX entries are in the [BrainChop Core README](https://github.com/neuroneural/brainchop-core#citation); citations for MindMap and MindSnap will be added upon publication.)*

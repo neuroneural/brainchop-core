@@ -133,44 +133,52 @@ HIP and Metal gain no new tuning stage.
 
 ## CLI contract
 
-The `brainchop` compatibility adapter defaults to **MindMap Fast**, the native
-16-channel, 18-class model, as explicitly requested for this migration. It ships
-only MindGrab, MindMap Fast, MindMap and MindSnap. `16chan18cls` and
-`model16chan18cls` are exact aliases for MindMap Fast. Historical `tissue_fast`,
-`robust_tissue`, `subcortical`, `DKatlas`, `aparc50` and arbitrary custom
-checkpoints are rejected; sharing a class count is not checkpoint equivalence.
+The `brainchop` CLI and Python API default to **`mindmap`** (18-class cortical
+and subcortical segmentation), matching the standalone native dispatcher. It
+ships only `mindgrab`, `mindmap`, `mindsnap`, and `mindmap-fast`.
+`16chan18cls` and `model16chan18cls` are exact aliases for `mindmap-fast`.
+Historical `tissue_fast`, `robust_tissue`, `subcortical`, `DKatlas`, `aparc50`,
+and arbitrary custom checkpoints are rejected; sharing a class count is not
+checkpoint equivalence.
 
 ```
 brainchop scan.nii.gz
-brainchop scan.nii.gz -m mindmap --inverse-conform
+brainchop scan.nii.gz -m mindmap --save-conform
 brainchop scan.nii.gz --skull-strip --mask mask.nii.gz
 brainchop scan.nii.gz -m mindmap --pve
 ```
 
 The supported historical spellings, batch naming, default mask filename,
 skull-strip precedence, CT/compliance flags, masks/borders, raw-class filenames
-and error exits are retained. Label output defaults to conformed 256³ space;
-`--inverse-conform` requests the input grid. MindGrab always writes the input
-grid. Native label restoration uses the existing majority resampling contract,
-whereas the historical Python CLI calls niimath nearest-neighbor restoration;
-this adapter does not promise identical inverse-resampling voxels to every
-legacy checkpoint. Frozen native fixtures remain the numerical gate.
+and error exits are retained. Output defaults to the **original input voxel
+grid** across both the Python wrapper and standalone native executables
+(`--save-conform` / `save_conform=True` keeps conformed 256³ outputs;
+`--inverse-conform` is still accepted as a no-op compatibility flag). `mindgrab`
+always writes the input grid. Native label restoration uses the existing
+majority resampling contract, whereas the historical Python CLI calls niimath
+nearest-neighbor restoration; this adapter does not promise identical
+inverse-resampling voxels to every legacy checkpoint. Frozen native fixtures
+remain the numerical gate.
 
 `--beam`, `--no-optimize` and `--batch-size` are accepted with an explanation:
 there is no expensive user search, and multiple inputs run sequentially.
 `--update` describes updating the package, because weights are embedded.
-MindMap's `--pve` is the native CAT-lite operation, not a substitute for the
-retired tissue models. Unsupported model/option combinations fail explicitly.
-A zero-dependency `import brainchop` scripting API (`Volume`, `load`,
-`segment`, `save`, `list_models`, `export_classes`) is included using only the
-Python standard library (`numpy` optional).
+`mindmap`'s `--pve` writes experimental GM/WM/CSF/Brain partial-volume tissue
+fractions, not a substitute for the retired tissue models. Unsupported
+model/option combinations fail explicitly. A zero-dependency `import brainchop`
+scripting API (`Volume`, `load`, `segment`, `save`, `list_models`,
+`export_classes`) is included using only the Python standard library (`numpy`
+optional).
 
-Individual tools: `brainchop-mindgrab`, `brainchop-mindmap-fast`,
-`brainchop-mindmap`, and `brainchop-mindsnap`. The package exposes only
-`brainchop-mindmap-fast` for the 16-channel checkpoint; the internal C build
-identifier remains unchanged. These tools retain the native CLI, including its
-input-space default. Thin Python entry points locate only this environment's
-binaries and protect optional CPU instructions before launch.
+Individual tools: `brainchop-mindgrab`, `brainchop-mindmap`,
+`brainchop-mindsnap`, and `brainchop-mindmap-fast`. The package exposes only
+`brainchop-mindmap-fast` for the lightweight checkpoint; the internal C build
+identifier remains unchanged. Prebuilt macOS Apple Silicon wheels are tagged
+`macosx_14_0_arm64` per PEP 425 (which requires minor version `0` on macOS 11+
+and rounds `MACOSX_DEPLOYMENT_TARGET=13.2` up to `14_0`); macOS 13.2–13.x users
+can install via Homebrew, the standalone `.pkg`, or a source wheel build. Thin
+Python entry points locate only this environment's binaries and protect optional
+CPU instructions before launch.
 
 ## Reproducible validation
 

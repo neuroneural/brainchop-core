@@ -426,7 +426,7 @@ def export_classes(raw_output: Any, header: bytes, output_path: str | Path) -> l
 
 def segment(
     volume: Volume | str | Path | list[Volume | str | Path],
-    model: str = "mindmap-fast",
+    model: str = "mindmap",
     *,
     shard_size: int = 1,
     beam: int = 0,
@@ -434,7 +434,8 @@ def segment(
     tta: bool = False,
     backend: str | None = None,
     threads: int | None = None,
-    inverse_conform: bool = False,
+    save_conform: bool = False,
+    inverse_conform: bool | None = None,
     no_turbo: bool = False,
     pve: bool = False,
     mask: bool = False,
@@ -446,18 +447,22 @@ def segment(
     """Segment one or more brain volumes with a native embedded model.
 
     Accepts a :class:`Volume` (from :func:`load`), a file path (``str``/``Path``),
-    or a list of them. Output defaults to conformed 256^3 space for label models
-    (matching historical ``brainchop-cli`` behavior); pass ``inverse_conform=True``
-    to reslice back to the input voxel grid. ``mindgrab`` always returns results
-    in input space.
+    or a list of them. Output defaults to the original input voxel grid for all
+    models (matching standalone binaries and ``@brainchop/core``); pass
+    ``save_conform=True`` to keep conformed 256^3 outputs for label/PVE models.
+    ``inverse_conform`` is accepted for backward compatibility.
     """
     canonical = _resolve_model(model)
     if tta:
         raise NotImplementedError(
             "Test-time augmentation (tta=True) is not available in the native runtime."
         )
+    if save_conform and inverse_conform is True:
+        raise ValueError("save_conform and inverse_conform cannot both be True.")
+    if save_conform and canonical == "mindgrab":
+        raise ValueError("mindgrab always writes in input space; omit save_conform=True.")
     if pve and canonical != "mindmap":
-        raise ValueError("pve=True is supported and validated only for model='mindmap'.")
+        raise ValueError("pve=True is supported only for model='mindmap'.")
     if pve and return_raw:
         raise ValueError("pve=True cannot be combined with return_raw=True.")
     if (mask or border) and canonical != "mindgrab":
@@ -500,7 +505,7 @@ def segment(
 
             out_path = tmp_dir / f"out_{idx}.nii"
             cmd = [executable, "-o", str(out_path)]
-            if canonical != "mindgrab" and not inverse_conform:
+            if canonical != "mindgrab" and save_conform:
                 cmd.append("--save-conform")
 
             use_ct = vol._load_opts.get("ct", False) if ct is None else ct

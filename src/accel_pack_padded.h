@@ -5,7 +5,7 @@
  * The padded f16 convolution-weight layout shared by CUDA and OpenCL.
  *
  * SHARED, NOT COPIED, for the reason accel_pack_weights.h states at length and
- * CLAUDE.md records: the GELU was copied across backends, silently diverged,
+ * benchmarking records: the GELU was copied across backends, silently diverged,
  * and a MindGrab build ran model16's function. This is a second instance of the
  * same hazard -- it encodes the tap stride, the layer-0 special case, the affine
  * skip and the classifier's exclusion from padding, any of which produces a
@@ -18,7 +18,7 @@
  * would double-transpose), it packs the affine diagonal and bias into the same
  * buffer (these upload the affine separately, per layer, as fp32), and it
  * carries a `pad_to` for texture-row alignment that neither needs. Folding all
- * four into one is blocked on unifying the kernel transpose, which CLAUDE.md
+ * four into one is blocked on unifying the kernel transpose, which this design
  * already lists under Known gaps -- that is the real prerequisite, not a header
  * move.
  *

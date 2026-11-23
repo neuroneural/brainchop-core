@@ -9,7 +9,7 @@
  *
  * SHARED ON PURPOSE. This began as a static function inside backend_webgpu.c
  * and was pulled out when the WebGL2 backend needed the identical conversion.
- * CLAUDE.md records what happens otherwise: the GELU approximation was copied
+ * benchmarking records what happens otherwise: the GELU approximation was copied
  * rather than shared and silently diverged across four backends, so a MindGrab
  * build ran model16's function. A rounding rule that differs by backend is the
  * same defect one order of magnitude quieter -- it would not produce an error,

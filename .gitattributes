@@ -12,7 +12,7 @@
 #
 #   src/Makefile   GNU make takes the CR as part of the value. X86_ISA becomes
 #                  "x86-64-v3\r" and the -march probe fails, silently costing the
-#                  2x that CLAUDE.md documents; BC_WINDOWS becomes "1\r" and
+#                  2x that Windows builds encounter; BC_WINDOWS becomes "1\r" and
 #                  compares unequal to "1", switching off every Windows branch;
 #                  and each recipe line reaches sh with a trailing CR, which
 #                  reports as the memorable `$'\r': command not found`.

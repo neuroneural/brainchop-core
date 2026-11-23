@@ -95,7 +95,7 @@
  * per thread reads those weights ONCE and reuses them across all VOX, dividing
  * weight traffic by VOX while the FMA count per voxel stays the same.
  *
- * The reasoning is MN_DEFINE_CONV's, transplanted: CLAUDE.md records MN_BLOCK=4
+ * The reasoning is MN_DEFINE_CONV's, transplanted: benchmarking records MN_BLOCK=4
  * as what keeps the CPU kernel at 98% of its FMA roofline, for exactly this
  * reason. The GPU's register budget per thread is tighter, so the optimum here
  * is 2, not 4.
@@ -438,7 +438,7 @@
 	"}\n"
 #define BC_WGSL_CONV BC_WGSL_CONV_SHAPE(BC_WG_LOCAL_X, BC_WG_VOX)
 
-/* AMD conv launch shape (CLAUDE.md, WGSL/WebGPU). Bit-identical to 64xVOX: a
+/* AMD conv launch shape (WGSL/WebGPU). Bit-identical to 64xVOX: a
    voxel's sums keep their order. Moments stays at BC_WG_LOCAL_X: wider reorders
    GroupNorm and needs 48 KiB of workgroup memory at CS 24 (default 16 KiB). */
 #define BC_WG_WIDE_X 256
@@ -568,7 +568,7 @@
  * Normalise, apply the optional per-channel affine, activate. In place, exactly
  * as mn_norm is.
  *
- * The channel loop runs to the literal CS, never to CHAN. CLAUDE.md records
+ * The channel loop runs to the literal CS, never to CHAN. benchmarking records
  * that bounding it by the logical channel count made Clang emit the CPU version
  * entirely scalar; the pad lanes are inert because the packed kernel zeroes
  * them, so the extra work is free and the loop stays uniform.

@@ -45,17 +45,20 @@ class CompatibilityTests(unittest.TestCase):
         self.assertTrue(cli.get_parser().parse_args(['-u']).update)
 
     def test_default_is_supported_embedded_model(self):
-        self.assertEqual(self.args().model, 'mindmap-fast')
+        self.assertEqual(self.args().model, 'mindmap')
         self.assertEqual(set(native.NATIVE_MODELS), {'mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'})
 
-    def test_default_and_inverse_output_spaces(self):
+    def test_default_and_conformed_output_spaces(self):
         for model in ('mindmap-fast', 'mindmap', 'mindsnap'):
             default = native.command(self.args(), model, 'binary', self.source, 'out.nii.gz')
             inverse = native.command(self.args('--inverse-conform'), model, 'binary', self.source,
                                      'out.nii.gz')
-            self.assertIn('--save-conform', default)
+            conformed = native.command(self.args('--save-conform'), model, 'binary', self.source,
+                                       'out.nii.gz')
+            self.assertNotIn('--save-conform', default)
             self.assertNotIn('--save-conform', inverse)
             self.assertNotIn('--inverse-conform', inverse)
+            self.assertIn('--save-conform', conformed)
         self.assertNotIn('--save-conform', native.command(self.args(), 'mindgrab', 'binary',
                                                          self.source, 'out.nii.gz'))
 

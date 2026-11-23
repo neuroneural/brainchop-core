@@ -83,7 +83,7 @@ static double quantile_u8(const int64_t *cum, size_t n, double q) {
  *
  * Do not "fix" this in isolation: it changes Metal output, and the CUDA and
  * OpenCL paths need checking for the same divergence at the same time. See the
- * known-gaps entry in CLAUDE.md.
+ * known-gaps entry in the build notes.
  */
 static __fp16 *normalize_input(const unsigned char *src) {
 	int64_t hist[256]={0},cum[256],run=0;

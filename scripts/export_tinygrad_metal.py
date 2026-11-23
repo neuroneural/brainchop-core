@@ -227,7 +227,7 @@ def replan_by_lifetime(captured, weight_ids) -> None:
 #
 # This is the same trick the rest of the project already relies on:
 # MESHNET_CPU_CHANNEL_STRIDE and BC_WG_CS are both 16 for exactly this reason,
-# and CLAUDE.md records that bounding the CPU loops by 15 instead made Clang
+# and benchmarking records that bounding the CPU loops by 15 instead made Clang
 # emit them scalar and cost ~10%.
 PAD_CHANNELS = 16
 

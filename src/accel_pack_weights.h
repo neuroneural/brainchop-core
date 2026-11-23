@@ -4,7 +4,7 @@
 /*
  * The GPU weight layout, shared by every backend that packs f16 weights.
  *
- * SHARED, NOT COPIED, and the reason is recorded in CLAUDE.md: the GELU
+ * SHARED, NOT COPIED, and the reason is recorded in development notes: the GELU
  * approximation was copied across backends rather than shared, silently
  * diverged, and a MindGrab build ran model16's function. This is that hazard
  * with more surface -- it encodes the 3x3x3 tap permutation, the

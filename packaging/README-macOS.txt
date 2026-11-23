@@ -6,11 +6,11 @@ This distribution targets Apple Silicon and requires macOS 13.2 or newer.
 The installer places the `brainchop` dispatcher and one executable per model in
 /usr/local/bin, which is on the default PATH, so they are ready to use immediately:
 
-  brainchop                unified CLI dispatcher (`brainchop -m <model> ...`)
+  brainchop                unified CLI dispatcher (`brainchop -m <model> ...`, default: mindmap)
   brainchop-mindgrab       skull stripping in any modality
-  brainchop-mindmap-fast   18-class brain segmentation (16-channel, v3.5, faster)
-  brainchop-mindmap        18-class brain segmentation (24-channel, v4.0 Gold)
-  brainchop-mindsnap       104-class Desikan-Killiany parcellation (v4.0 Gold)
+  brainchop-mindmap        18-class cortical and subcortical segmentation
+  brainchop-mindsnap       104-class Desikan-Killiany parcellation
+  brainchop-mindmap-fast   fast lightweight 18-class segmentation
 
 Each executable is entirely self-contained. Its model weights are compiled into
 it and it uses no library outside macOS itself, so there is no folder to keep

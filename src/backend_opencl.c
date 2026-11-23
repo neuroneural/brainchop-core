@@ -39,7 +39,7 @@
 
 /*
  * The bounds this backend's literals impose on a model, asserted rather than
- * assumed. CLAUDE.md promises that adding a model needs no shared C change;
+ * assumed. the architecture requires that adding a model needs no shared C change;
  * these are the places that promise has an edge, and backend_cuda.cu already
  * carries the channel one. OpenCL carried none.
  */

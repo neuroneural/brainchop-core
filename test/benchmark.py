@@ -22,7 +22,7 @@ Four numbers per cell:
 
             Median rather than min, because with the warm-up gone the remaining
             spread is ordinary scheduling noise in both directions rather than a
-            one-sided tax on a clean floor. CLAUDE.md's warning still applies --
+            one-sided tax on a clean floor. the project's warning still applies --
             a loaded machine inflates these ~2.5x, so only compare captures
             taken under the same conditions.
 

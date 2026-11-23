@@ -3,9 +3,8 @@ import { BrainchopError } from './error.js'
 /*
  * gzip lives here and nowhere else.
  *
- * The wasm module links no zlib at all -- that is a deliberate size decision
- * recorded in CLAUDE.md, and the C refuses a `.nii.gz` cleanly rather than
- * misreading it. So the module only ever sees raw NIfTI, and this file is the
+ * The wasm module links no zlib at all -- a deliberate bundle-size decision --
+ * and the C code refuses a `.nii.gz` cleanly rather than misreading it. So the module only ever sees raw NIfTI, and this file is the
  * whole of the compression contract, using the platform's own streams rather
  * than a bundled inflate.
  */

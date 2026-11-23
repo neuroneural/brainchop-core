@@ -23,17 +23,48 @@ Powered by four embedded 3D MeshNet models with **no PyTorch, TensorFlow, tinygr
 - **Web App:** [brainchop.org](https://brainchop.org)
 - **Repository:** [github.com/neuroneural/brainchop-core](https://github.com/neuroneural/brainchop-core)
 - **License:** MIT (see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md))
+- **Intended use:** Research and educational use; not cleared as a medical device for clinical diagnosis.
 
-## Embedded Models
+## Embedded Models & Model Cards
 
-All four models are compiled directly into self-contained binaries (no separate model downloads or cache directories):
+All four models are compiled directly into self-contained binaries (no separate weight downloads or cache directories):
 
-| Model | CLI / Python name | Executable | Channels / Classes | Purpose |
+| CLI / API name | Paper name | Executable | Params | Classes | Intended Input | Purpose & Notes |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| `mindgrab` (`--skull-strip`) | MindGrab | `brainchop-mindgrab` | 145K | 2 | T1, T2, FLAIR, DWI, EPI, MRA, PDw, qT1, CT, PET | Modality-agnostic skull stripping & brain masking (`--mask`, `--border`, `--crop`) |
+| `mindmap` *(default)* | MindMap-24 | `brainchop-mindmap` | 188K | 18 | 3D T1w MRI | Primary cortical & subcortical segmentation; optional experimental GM/WM/CSF tissue fractions (`--pve`) |
+| `mindsnap` | MindSnap-104 | `brainchop-mindsnap` | 190K | 104 | 3D T1w MRI | Desikan-Killiany cortical + subcortical + 5-part corpus callosum parcellation |
+| `mindmap-fast` | MindMap-16 | `brainchop-mindmap-fast` | 84K | 18 | 3D T1w MRI | Fast lightweight 18-class preview (`16chan18cls` alias); **not** recommended for hippocampal atrophy morphometry |
+
+*Training & label provenance:* `mindmap`, `mindsnap`, and `mindmap-fast` are trained on synthetic and T1w brain volumes supervised with FreeSurfer-convention anatomical parcellation labels; `mindgrab` is trained on multi-contrast synthetic and multi-modal neuroimaging volumes ([Fani et al., 2026](https://doi.org/10.1016/j.neuroimage.2026.122074)). The companion manuscript also evaluates a 50-class variant (`MindSnap-50`), omitted from this default runtime bundle to keep package footprints small.
+
+### Validation Summary & Known Limitations
+
+Metrics below are from the locked evaluation ledger (`v3.8` spec / `v4.0` release weights; exact checkpoint checksums in [Weight Provenance](#weight-provenance-sha-256)):
+
+| Benchmark | `mindmap` | `mindsnap` | `mindmap-fast` | SynthSeg 2.0 | FastSurferVINN 2.4.2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 6 Manual-Label Cohorts Mean Dice (Mindboggle, IBSR18, LPBA40, HiSUB25, MALC-35, Hammers) | **0.792** | **0.790** | 0.790 | 0.801 | 0.803 |
+| Mindboggle-101 Shared-11 Manual Dice | **0.829** | 0.826 | 0.822 | 0.827 | 0.843 |
+| Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | **0.720** | — | 0.714 (`--parc`) | 0.824 |
+| EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | **0.794** | 0.684 | 0.009 | 0.792 | 0.811 |
+| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | **2.26%** | 2.66% | — | 3.38% |
+
+**Known limitations:**
+- **Thick-slice clinical scans (5 mm):** SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`) outperform isotropic-trained BrainChop (`0.734–0.739`) on heavily anisotropic 5 mm acquisitions.
+- **`mindmap-fast` hippocampal atrophy:** `mindmap-fast` does not include the atrophy-repaired training regime (HarP asymmetry `r = 0.009`); use `mindmap` or `mindsnap` for hippocampal morphometry or dementia cohorts.
+- **Experimental `--pve` tissue fractions:** Continuous GM/WM/CSF/Brain probability maps (`mindmap --pve` / `segmentTissues`) are experimental and have not yet been quantitatively benchmarked against CAT12 or FSL FAST.
+
+### Weight Provenance (SHA-256)
+
+Every binary and npm asset in this repository is built directly from the verified files below:
+
+| Model | Paper Checkpoint | Shipped `model.bin` (SHA-256) | Shipped `model.safetensors` FP16 (SHA-256) | Locked `.pth` (SHA-256) |
 | --- | --- | --- | --- | --- |
-| **MindGrab** | `mindgrab` (`--skull-strip`) | `brainchop-mindgrab` | 15ch / 2-class | Modality-agnostic skull stripping & brain masking (`--mask`, `--border`, `--crop`) |
-| **MindMap Fast** | `mindmap-fast` *(default)* | `brainchop-mindmap-fast` | 16ch / 18-class (v3.5) | Fast 18-class cortical & subcortical segmentation (`16chan18cls` alias) |
-| **MindMap-18** | `mindmap` | `brainchop-mindmap` | 24ch / 18-class (v4.0 Gold) | High-accuracy 18-class segmentation + CAT-lite GM/WM/CSF tissue fractions (`--pve`) |
-| **MindSnap-104** | `mindsnap` | `brainchop-mindsnap` | 24ch / 104-class (v4.0 Gold) | Full 104-class Desikan-Killiany cortical & subcortical parcellation |
+| `mindgrab` | MindGrab (NeuroImage 2026) | `c9a01490fe2d13acc1515fd019b69db176ebe6f40c9b84aeb77f25acbc2ee0f3` | `21bf4c811a4790fa2498a49f2aa9042f9108964111b54a006fde1194b0e0e7b9` | — |
+| `mindmap` | MindMap-24 (`mm18_v40_gold`) | `58006d1951212bf33695a8f4409823e872902a6e060b21e87d3fd65c1eb7c4e5` | `b86e11e7884061b81c2ac6d253c90933a3651e0accb7657b9c90f98afcee76ef` | `f6b60026daccabc689ff56bbadd5c1141a5645529f75eb998fe58426ac7f1b48` |
+| `mindsnap` | MindSnap-104 (`ms104_v40_gold`) | `995cdb522ba941b41ba7ab61d0484e8700f6c3d6084398ce28c6ce75d1ca2a1a` | `e485cac1ffc5bfc55a9cbca848d4fdae4a99a9f06cdec7e5d55e7801b9e44540` | `6b713d9d995bcce0ad5dd6c129f022aeb0241812f5acf64610f4a43ea6544bbc` |
+| `mindmap-fast` | MindMap-16 (`mindmap_16ch_v3_5_locked`) | `22d73f439fbf4e4195adbd68f813f3c433b2d3f336d48a097ce7fb83bc5785b6` | `aa0ea2e4a4f1fdffadf0bcb957f8aa5c13efd3dc4e7f85a39df2ae8690a6748f` | `5b8aade1940ae11ddd472a5a212da2a5b7d16f3ceec4f6884bcfe99f7f1bdfe5` |
 
 ## Quick Install
 
@@ -46,7 +77,7 @@ pip install brainchop
 uvx brainchop input.nii.gz -o labels.nii.gz
 ```
 
-Prebuilt wheels (`win_amd64`, `macosx_arm64`, `linux_x86_64`) install in ~2 seconds with **zero runtime dependencies** (no PyTorch, no tinygrad, no CUDA Toolkit, no compiler needed). Source installs automatically detect your CPU/GPU (Apple Metal, NVIDIA CUDA Driver API, AMD ROCm HIP) and compile locally. See [docs/pypi.md](docs/pypi.md) for details.
+Prebuilt wheels (`win_amd64`, `macosx_14_0_arm64`, `manylinux_2_28_x86_64`) install in ~2 seconds with **zero runtime dependencies** (no PyTorch, no tinygrad, no CUDA Toolkit, no compiler needed). On macOS 13.2–13.x Apple Silicon, pip falls back to a local source build (or install via Homebrew / the signed `.pkg` below), because PEP 425 wheel tags require minor version `0` on macOS 11+ (`macosx_14_0_arm64`). Source installs automatically detect your CPU/GPU (Apple Metal, NVIDIA CUDA Driver API, AMD ROCm HIP) and compile locally. See [docs/pypi.md](docs/pypi.md) for details.
 
 ### Homebrew (macOS & Linux)
 
@@ -60,11 +91,11 @@ brew install neuroneural/tap/brainchop
 npm install @brainchop/core
 ```
 
-Pure-JS WebGPU V4 engine (with automatic low-memory staging for mobile & integrated GPUs), plus WebGL2 and multi-threaded WebAssembly CPU fallbacks. See [js/README.md](js/README.md) for browser API usage.
+Pure-JS WebGPU engine with automatic low-memory staging, plus WebGL2 and multi-threaded WebAssembly CPU fallbacks. See [js/README.md](js/README.md) for browser API usage.
 
 ### Standalone Native Binaries (Zero Python)
 
-Download signed macOS Apple Silicon `.pkg` installers or self-contained Linux / Windows archives from [GitHub Releases](https://github.com/neuroneural/brainchop-core/releases). Each archive includes the `brainchop` dispatcher plus all four standalone executables.
+Download signed macOS Apple Silicon `.pkg` installers (macOS 13.2+) or self-contained Linux / Windows archives from [GitHub Releases](https://github.com/neuroneural/brainchop-core/releases). Each archive includes the `brainchop` dispatcher plus all four standalone executables.
 
 ### Build from Source
 
@@ -79,30 +110,30 @@ Requires only a C11 compiler (`clang` or `gcc`) and system `zlib`. Builds all fo
 ### Command Line
 
 ```bash
-# Default 18-class fast segmentation (MindMap Fast v3.5)
+# Default 18-class cortical & subcortical segmentation (mindmap)
 brainchop input.nii.gz -o labels.nii.gz
 
-# High-accuracy 18-class segmentation (MindMap-18 v4.0 Gold)
-brainchop input.nii.gz -m mindmap -o labels.nii.gz
-
-# Continuous GM / WM / CSF / Brain partial-volume maps (CAT-lite)
-brainchop input.nii.gz -m mindmap --pve -o tissues.nii.gz
-
-# 104-class Desikan-Killiany parcellation (MindSnap-104 v4.0 Gold)
+# 104-class Desikan-Killiany parcellation (mindsnap)
 brainchop input.nii.gz -m mindsnap -o parcels.nii.gz
 
-# Skull stripping + binary brain mask (MindGrab)
+# Fast lightweight 18-class segmentation (mindmap-fast)
+brainchop input.nii.gz -m mindmap-fast -o labels_fast.nii.gz
+
+# Experimental continuous GM / WM / CSF / Brain partial-volume maps
+brainchop input.nii.gz -m mindmap --pve -o tissues.nii.gz
+
+# Skull stripping + binary brain mask (mindgrab)
 brainchop input.nii.gz --skull-strip --mask brain_mask.nii.gz -o stripped.nii.gz
 
-# Reslice label output back to original input voxel grid
-brainchop input.nii.gz -m mindmap --inverse-conform -o labels_native.nii.gz
+# Keep label output in conformed 256^3 1 mm space instead of input space
+brainchop input.nii.gz -m mindmap --save-conform -o labels_conformed.nii.gz
 
 # List embedded models or inspect GPU adapters
 brainchop --list
 brainchop-mindmap -a -1
 ```
 
-> **Output space:** The Python `brainchop` wrapper preserves historical `brainchop-cli` behavior (label outputs in conformed 256³ space by default; pass `--inverse-conform` for native input space). Standalone native executables (`brainchop-mindmap`, etc.) default to input space (pass `--save-conform` for conformed 256³ space). MindGrab always writes in input space.
+> **Unified output space:** Every interface — the Python `brainchop` CLI, `import brainchop`, standalone native executables (`brainchop-mindmap`, etc.), and `@brainchop/core` — writes outputs in the **original input voxel grid by default**. Pass `--save-conform` (`save_conform=True` in Python, `saveConform: true` in JS) to keep conformed 256³ outputs. (`--inverse-conform` is still accepted as a no-op compatibility flag.) `mindgrab` always writes in input space.
 
 ### Python API
 
@@ -114,39 +145,44 @@ import brainchop as bc
 print(bc.list_models())
 
 vol = bc.load("input.nii.gz")
-labels = bc.segment(vol, "mindmap")          # or pass a path / list of paths directly
+labels = bc.segment(vol, "mindmap")          # default: native input space
 bc.save(labels, "labels.nii.gz")
 
-# Native input-space output
-labels_native = bc.segment("input.nii.gz", "mindsnap", inverse_conform=True)
+# Optional conformed 256^3 output
+labels_conf = bc.segment("input.nii.gz", "mindsnap", save_conform=True)
 
-# CAT-lite GM/WM/CSF/Brain tissue fractions
+# Experimental GM/WM/CSF/Brain partial-volume tissue fractions
 tissues = bc.segment("input.nii.gz", "mindmap", pve=True)
 bc.save(tissues["gm"], "gm.nii.gz")
 ```
 
 ### Browser / JavaScript (WebGPU + WebGL2 + WASM CPU)
 
-Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/README.md](js/README.md) for the browser ES module package supporting client-side 3D segmentation on pure-JS WebGPU V4 (including automatic low-memory staging for mobile & integrated GPUs), WebGL2, and multi-threaded WebAssembly CPU.
+Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/README.md](js/README.md).
 
-## Compute Backends & Performance
+## Compute Backends, Precision & Provenance
 
-`brainchop` automatically picks the fastest validated backend on your machine and falls back cleanly to multi-threaded CPU (`--no-turbo` switches from the default fast 8-bit activation path to exact fp32/fp16 math):
+`brainchop` automatically picks the fastest validated backend on your machine and falls back cleanly to multi-threaded CPU:
 
 | Backend | Hardware | Auto-Selected | Notes |
 | --- | --- | --- | --- |
 | **CUDA** | NVIDIA GPUs (`sm60`–`sm90`+, Driver API >= 12.8) | Yes | Embedded offline fatbins — no CUDA Toolkit or `nvcc` required |
 | **HIP** | AMD Radeon (`gfx1151` / ROCm) | Yes | Embedded HSACO artifacts — no `hipcc` required |
-| **Metal** | Apple Silicon (macOS 13.2+) | Yes | 8-bit Turbo (~0.8–1.2 s for 24ch models on M-series) & exact fp16 |
+| **Metal** | Apple Silicon (macOS 13.2+ native / 14+ wheel) | Yes | 8-bit Turbo (~0.8–1.2 s for `mindmap`/`mindsnap` on M-series) & exact fp16 |
 | **CPU** | Apple SME / NEON, x86-64 AVX-512 VNNI / AVX-VNNI / AVX2+FMA | Yes | 8-bit Turbo & bit-exact fp32 across compilers/architectures |
 | **OpenCL** | Explicit opt-in (`--backend opencl`) | No | Available via `-backend opencl` when explicitly requested |
 
+**Cross-platform determinism & provenance:**
+- Both the default 8-bit activation path (`turbo`) and GPU FP16 paths can differ at a small fraction of boundary voxels across GPU/CPU architectures (typical whole-brain voxel agreement >99.9%). For longitudinal or multi-site studies, pin a single backend across the cohort — or pass `-cpu 0 --no-turbo` for bit-exact FP32 CPU reproducibility across machines.
+- Every output NIfTI-1 file records provenance in its 80-byte `descrip` header field (e.g., `brainchop 1.0.0 mindmap metal turbo` or `brainchop 1.0.0 mindsnap cpu exact`) so downstream QC scripts can verify backend consistency.
+
 ## Documentation
 
-- [Building, Backends, Testing & Packaging Reference](docs/building-and-testing.md) — full compiler flags, macOS `.pkg` notarization, CUDA/HIP offline artifact generation, WASM builds, and verification suites.
+- [Building, CLI & Compute Backends](docs/building.md) — full option reference, macOS/Linux/Windows builds, `.pkg` notarization, and backend selection.
+- [Testing, Benchmarks & WebAssembly](docs/testing-and-wasm.md) — verification suites, hardware gates, and browser WASM builds.
 - [PyPI Packaging & Adaptive Hardware Selection](docs/pypi.md) — prebuilt wheels, source-first adaptive rebuilds, and offline installs.
 - [Browser Package Documentation](js/README.md) — WebGPU, WebGL2, and threaded WASM CPU API.
-- [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md)
+- [CUDA Offline Modules](docs/cuda-modules.md) | [HIP Artifacts](docs/hip-artifacts.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md)
 
 ## Citation
 
@@ -164,7 +200,7 @@ If you use BrainChop Core in published research, please cite the relevant papers
    Mohamed Masoud, Farfalla Hu, and Sergey Plis. *Brainchop: In-browser MRI volumetric segmentation and rendering.* **Journal of Open Source Software**, 8(83):5098, 2023.
    [DOI: 10.21105/joss.05098](https://doi.org/10.21105/joss.05098)
 
-*(Citations for the v4.0 segmentation models — MindMap and MindSnap — will be added here upon publication.)*
+*(Citations for the MindMap and MindSnap segmentation models will be added here upon publication.)*
 
 ```bibtex
 @article{fani2026mindgrab,

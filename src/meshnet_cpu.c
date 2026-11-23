@@ -46,9 +46,9 @@ typedef struct {
  * choice: the pool has to call the body from several threads, so the body must
  * be a function. It is the same outlining the OpenMP version did behind the
  * pragma -- clang emitted `.omp_outlined.` companions, which is what the
- * ThreadSanitizer traces in CLAUDE.md name -- so the code generation this file
+ * ThreadSanitizer traces in the build notes name -- so the code generation this file
  * is tuned around is unchanged. Verify that with instruction counts, per the
- * rule at the top of CLAUDE.md, not with a clock.
+ * rule at the top of this project, not with a clock.
  */
 
 float *meshnet_cpu_pack_kernel(const float *source, int input_channels,
@@ -325,7 +325,7 @@ static void NAME(const float *restrict source, float *restrict destination, \
 }
 
 /*
- * The macro body above is frozen (see CLAUDE.md): it is at 98% of this machine's
+ * The macro body above is frozen (frozen for performance): it is at 98% of this machine's
  * NEON fp32 FMA roofline and the literal channel counts are what keep 16
  * accumulators in registers. Only the INSTANTIATION LIST is conditional here.
  * A single-model build emits two shapes rather than three -- mn_conv_first plus
@@ -408,7 +408,7 @@ static void NAME(const float *buffer, double *partial, float *mean, float *invst
  * Always over the full MN_CS stride, never the model's logical channel count.
  * For a model with fewer channels the pad lanes are inert -- pack_kernel
  * calloc()s them, so they stay zero -- and running the loop to a literal 16
- * lets Clang vectorise it. CLAUDE.md records that the alternative emitted
+ * lets Clang vectorise it. benchmarking records that the alternative emitted
  * entirely scalar code and cost ~10% of MindGrab's runtime.
  */
 MN_DEFINE_MOMENTS(mn_moments, MN_CS)

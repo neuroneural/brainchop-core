@@ -107,8 +107,16 @@ void bc_cli_help(FILE *stream, const char *program) {
 	fprintf(stream, "\n       %*s [-cpu N] [-backend %s] input\n\n",
 		pad, "", BC_BACKEND_CHOICES);
 
+	const char *public_name =
+		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" : BC_MODEL_NAME;
+	const char *public_desc =
+		!strcmp(BC_MODEL_NAME, "mindgrab") ? "skull stripping in any modality" :
+		!strcmp(BC_MODEL_NAME, "mindmap") ? "18-class cortical and subcortical segmentation" :
+		!strcmp(BC_MODEL_NAME, "mindsnap") ? "104-class Desikan-Killiany parcellation" :
+		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "fast lightweight 18-class segmentation" :
+		BC_MODEL_DESCRIPTION;
 	fprintf(stream, "BrainChop %s: %s (v%s)\n\n",
-		BC_MODEL_NAME, BC_MODEL_DESCRIPTION, BC_VERSION);
+		public_name, public_desc, BC_VERSION);
 
 	fprintf(stream,
 		"positional arguments:\n"
@@ -123,7 +131,7 @@ void bc_cli_help(FILE *stream, const char *program) {
 		"  --export-classes      Export per-class raw maps as separate files\n");
 #if BC_HAS_PVE
 	fprintf(stream,
-		"  --pve                 CAT-lite GM/WM/CSF partial-volume fractions;\n"
+		"  --pve                 Experimental GM/WM/CSF partial-volume tissue fractions;\n"
 		"                        writes OUTPUT_gm, OUTPUT_wm, OUTPUT_csf and\n"
 		"                        OUTPUT_brain (GM + WM)\n");
 #ifdef HAVE_OPENCL
@@ -251,9 +259,9 @@ static int rejected_option(const char *argument) {
 		{ "--adapter", BC_HAS_SELECTABLE_ADAPTER,
 		  "this build has no GPU backend with adapters to choose between" },
 		{ "--pve", BC_HAS_PVE,
-		  "CAT-lite tissue fractions are supported and validated only for MindMap" },
+		  "partial-volume tissue fractions (--pve) are supported only for mindmap" },
 		{ "--partial-volume-estimate", BC_HAS_PVE,
-		  "CAT-lite tissue fractions are supported and validated only for MindMap" },
+		  "partial-volume tissue fractions (--pve) are supported only for mindmap" },
 		{ "--legacy-cleanup", BC_HAS_LEGACY_CLEANUP,
 		  "it applies only to label models with per-class cleanup" },
 		{ "--custom", 0, "the model is compiled into this executable" },

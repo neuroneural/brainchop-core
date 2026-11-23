@@ -25,20 +25,20 @@ def get_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   brainchop input.nii.gz -o output.nii.gz
-  brainchop input.nii.gz -m mindmap-fast --inverse-conform
+  brainchop input.nii.gz -m mindmap-fast -o output_fast.nii.gz
   brainchop input.nii.gz --skull-strip --mask brain_mask.nii.gz
-  brainchop input.nii.gz -m mindmap --pve --inverse-conform
+  brainchop input.nii.gz -m mindmap --pve -o tissues.nii.gz
 
-Label output defaults to conformed 256^3 space for CLI compatibility.
-Use --inverse-conform to return labels to the input grid.
-MindGrab always writes the stripped image and mask in the input grid.
+All models write output in the original input voxel grid by default
+(matching the standalone native binaries). Pass --save-conform to keep
+conformed 256^3 label/PVE outputs.
 """,
     )
     parser.add_argument("input", nargs="*", help="Input NIfTI file(s)")
     parser.add_argument("-o", "--output", default="output.nii.gz",
                         help="Output path (default: derive a name from input and model)")
-    parser.add_argument("-m", "--model", default="mindmap-fast",
-                        help="mindgrab, mindmap-fast (default; 16-channel, 18-class), mindmap, or mindsnap")
+    parser.add_argument("-m", "--model", default="mindmap",
+                        help="mindgrab, mindmap (default; 18-class), mindsnap (104-class), or mindmap-fast (fast lightweight)")
     parser.add_argument("-l", "--list", action="store_true", help="List embedded models")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {_package_version()}",
                         help="Show version and exit")
@@ -56,9 +56,9 @@ MindGrab always writes the stripped image and mask in the input grid.
                         help="Insert compliance transform before conform")
     space = parser.add_mutually_exclusive_group()
     space.add_argument("--inverse-conform", action="store_true",
-                       help="Reslice label output back to original input space")
+                       help="Reslice output to original input space (default; kept for CLI compatibility)")
     space.add_argument("--save-conform", action="store_true",
-                       help="Keep label output in conformed space (the CLI default)")
+                       help="Write label/PVE output in conformed 256^3 space instead of the input grid")
     parser.add_argument("--export-classes", action="store_true",
                         help="Export per-class raw maps as <output>_cN.nii (CPU)")
     parser.add_argument("--mask", nargs="?", const="mask.nii.gz", metavar="PATH",
@@ -79,7 +79,7 @@ MindGrab always writes the stripped image and mask in the input grid.
     parser.add_argument("--no-turbo", action="store_true",
                         help="Exact CPU / fp16 GPU instead of the faster, approximate default")
     parser.add_argument("--pve", action="store_true",
-                        help="MindMap: write CAT-lite tissue fractions instead of labels")
+                        help="mindmap: write experimental GM/WM/CSF tissue fractions instead of labels")
     return parser
 
 

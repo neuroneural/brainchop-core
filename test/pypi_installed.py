@@ -98,14 +98,14 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='brainchop-pip-inference-') as temporary:
         work = Path(temporary)
-        # This is the old Python CLI's conformed-space default, which differs
-        # from the standalone C binaries' input-space default.
-        for model, reference in (('mindmap-fast', 'labels16.nii.gz'),
-                                 ('mindmap', 'labels24.nii.gz'),
+        # All CLI models default to input space; pass --save-conform here to
+        # verify parity against the conformed 256^3 reference fixtures.
+        for model, reference in (('mindmap', 'labels24.nii.gz'),
+                                 ('mindmap-fast', 'labels16.nii.gz'),
                                  ('mindsnap', 'labels104.nii.gz')):
             output = work / f'{model} output.nii.gz'
-            model_args = [] if model == 'mindmap-fast' else ['-m', model]
-            run(fixtures / 't1_crop.nii.gz', *model_args, '--threads', '4', '--no-turbo', '-o', output)
+            model_args = [] if model == 'mindmap' else ['-m', model]
+            run(fixtures / 't1_crop.nii.gz', *model_args, '--save-conform', '--threads', '4', '--no-turbo', '-o', output)
             expected = fixtures / reference
             if model == 'mindmap':
                 # The historical labels24 fixture uses --legacy-cleanup. The

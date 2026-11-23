@@ -19,7 +19,7 @@
  * WHY A MUTEX AND NOT AN ATOMIC COUNTER. Claiming a chunk takes the pool mutex,
  * which looks like the obvious thing to make lock-free and is not worth it: the
  * lock is held for a dozen instructions and a whole run claims a few thousand
- * chunks, against regions two orders of magnitude longer (CLAUDE.md has the
+ * chunks, against regions two orders of magnitude longer (profiling has the
  * timings). Avoiding <stdatomic.h> is a second, forward-looking reason: it
  * keeps this compilable by MSVC for the ABI build named under *What this leaves
  * for Windows*. NOT for the CUDA DLL, which compiles the serial branch and
@@ -193,7 +193,7 @@ static void stop_pool(void) {
 /*
  * ONE OWNER for the clamp. Every path produces a raw long and this is the only
  * place a bound is applied; bc_threads_set_count and brainchopc.c deliberately
- * do not. (CLAUDE.md records what having four owners cost.)
+ * do not. (benchmarking records what having four owners cost.)
  */
 static int resolve_count(void) {
 	long wanted = pool_requested;

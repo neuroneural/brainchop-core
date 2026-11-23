@@ -43,9 +43,9 @@ typedef struct {
 
 static const bc_model_entry BC_MODELS[] = {
 	{ "mindgrab",     "Skull stripping in any modality" },
-	{ "mindmap-fast", "16-channel, 18-class MindMap v3.5 segmentation (default)" },
-	{ "mindmap",      "24-channel, 18-class MindMap-18 v4.0 Gold segmentation" },
-	{ "mindsnap",     "24-channel, 104-class MindSnap-104 v4.0 Gold Desikan-Killiany parcellation" },
+	{ "mindmap",      "18-class cortical and subcortical segmentation (default)" },
+	{ "mindsnap",     "104-class Desikan-Killiany cortical and subcortical parcellation" },
+	{ "mindmap-fast", "Fast lightweight 18-class segmentation" },
 };
 
 static const size_t BC_MODEL_COUNT = sizeof(BC_MODELS) / sizeof(BC_MODELS[0]);
@@ -60,7 +60,7 @@ static void print_help(FILE *out, const char *prog) {
 		"usage: %s [-h] [-v] [-l] [-m MODEL | --skull-strip] [MODEL_OPTIONS ...] INPUT\n\n"
 		"BrainChop %s: native brain segmentation and skull stripping\n\n"
 		"Dispatcher options:\n"
-		"  -m, --model MODEL   select model (default: mindmap-fast)\n"
+		"  -m, --model MODEL   select model (default: mindmap)\n"
 		"      --skull-strip   shorthand for --model mindgrab\n"
 		"  -l, --list          list embedded models\n"
 		"  -v, --version       show version and exit\n"
@@ -313,11 +313,11 @@ int main(int argc, char **argv) {
 		return 0;
 	}
 
-	const char *model_name = explicit_model ? requested_model : "mindmap-fast";
+	const char *model_name = explicit_model ? requested_model : "mindmap";
 	const char *canonical = resolve_model(model_name);
 	if (!canonical) {
 		fprintf(stderr,
-			"brainchop: unknown model '%s'. Available models: mindgrab, mindmap-fast, mindmap, mindsnap.\n",
+			"brainchop: unknown model '%s'. Available models: mindgrab, mindmap, mindsnap, mindmap-fast.\n",
 			model_name);
 		const char *hint = legacy_hint(model_name);
 		if (hint) fprintf(stderr, "brainchop: %s\n", hint);

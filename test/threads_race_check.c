@@ -5,7 +5,7 @@
  * through outputs -- `make test`, the thread-count sweep, the browser gates --
  * and a bit-exact test structurally CANNOT detect a benign race: two threads
  * writing the same value pass every time. That was true of the OpenMP loops
- * this replaced and CLAUDE.md says so; it is true of the pool as well.
+ * this replaced and that holds by design; it is true of the pool as well.
  *
  * WHY IT HAS TWO MODES, which is the whole point. A TSan run that reports
  * nothing is worthless unless you know the detector was armed and could see
@@ -39,7 +39,7 @@
 /*
  * THE RENDEZVOUS, and it is the reason this harness is trustworthy at all.
  *
- * Without it both modes are scheduler-dependent, and measurably so -- CLAUDE.md
+ * Without it both modes are scheduler-dependent, and measurably so -- benchmarking
  * has the rate. bc_parallel_for makes the calling thread a participant, and 256
  * indices at grain 4 is only 64 chunks, so a caller that gets going before any
  * worker wakes can drain the entire range itself.

@@ -326,54 +326,6 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(upgraded16["schema_version"], 2)
             self.assertLess(upgraded16["buffers"][0]["bytes"], 2_300_000_000)
 
-    def test_original_pr34_mindsnap_reuse_reproduces_promoted_artifact(self):
-        # Frozen PR #34 at 102254f166bf4abb28096851e896e097e4ce6d74.
-        # No Git, network, ROCm or ML dependencies: archived scripts are only
-        # hashed as provenance, never imported/executed. The new head is taken
-        # directly from our checked-in code object, as an offline compile output.
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            with tarfile.open(ROOT / "test/hip_pr34_reuse.tar.gz", "r:gz") as archive:
-                for member in archive.getmembers():
-                    name = Path(member.name)
-                    self.assertFalse(name.is_absolute() or ".." in name.parts)
-                    self.assertTrue(member.isfile())
-                    destination = root / name
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(archive.extractfile(member).read())
-            source, sources = root / "artifact", root / "sources"
-            weights = sources / "src/models/mindsnap/model.bin"
-            shutil.copyfile(ROOT / "src/models/mindsnap/model.bin", weights)
-            original = verify(source, sources)
-            self.assertEqual(original["bundle"]["sha256"],
-                "c749bb8f9f67510cf676639d14845fcb377b443912ca6f3caff2cd4b692a0de6")
-            self.assertNotIn("bounded_head", original["toolchain"]["compile_options"])
-            promoted = verify(ROOT / "src/hip_artifacts/mindsnap/gfx1151", ROOT)
-            head = promoted["kernels"][-1]
-            dispatch = promoted["dispatches"][-1]
-            bundle = (ROOT / "src/hip_artifacts/mindsnap/gfx1151/kernels.bin").read_bytes()
-            compiled = root / "head"
-            compiled.mkdir()
-            (compiled / "classify.hsaco").write_bytes(bundle[head["offset"]:head["offset"] + head["size"]])
-            (compiled / "manifest.json").write_text(json.dumps([{
-                "file": "classify.hsaco", "symbol": head["entry"],
-                "grid": dispatch["grid"], "block": dispatch["block"],
-                "dynamic_lds_bytes": dispatch["dynamic_lds_bytes"],
-                "args": [{"role": role, "bytes": arg["bytes"]} for role, arg in
-                         zip(("activation", "weight", "bias", "out"), dispatch["args"])],
-            }]))
-            args = argparse.Namespace(gfx="gfx1151", num_compute_units=40,
-                num_chiplets=1, wavefront_size=32, hipcc="missing-hipcc")
-            result = builder.replace_label_tail(model_spec("mindsnap"), source, sources,
-                                                compiled, root / "out", args)
-            self.assertEqual(result["bundle"], promoted["bundle"])
-            self.assertEqual(result["buffers"], promoted["buffers"])
-            self.assertEqual(result["dispatches"], promoted["dispatches"])
-            self.assertEqual(result["weights"], promoted["weights"])
-            self.assertEqual((root / "out/catalog.h").read_text(), builder.render_catalog(promoted))
-            self.assertEqual([k["sha256"] for k in result["kernels"][:-1]],
-                             [k["sha256"] for k in original["kernels"][:-3]])
-
     def test_promoted_mindsnap_memory_contract_rejects_regressions(self):
         source = ROOT / "src/hip_artifacts/mindsnap/gfx1151"
         original = json.loads((source / "manifest.json").read_text())

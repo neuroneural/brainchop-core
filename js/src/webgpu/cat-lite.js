@@ -501,17 +501,17 @@ export async function runCatLite(priors, intensity, modelEntry, statData, toNati
   statData.Tissue = 'GM/WM/CSF';
   statData.Softmax_Temperature = modelEntry.softmaxTemperature ?? 1;
   if (stats.applied) {
-    statData.Partial_Volume = 'CAT-lite mixed-class PVE';
-    statData.CAT_Lite_Tissue_Means = formatTissues(stats.tissueMeans);
-    statData.CAT_Lite_Tissue_Sigmas = formatTissues(stats.tissueSigmas);
+    statData.Partial_Volume = 'Mixed-class partial-volume estimation';
+    statData.PVE_Tissue_Means = formatTissues(stats.tissueMeans);
+    statData.PVE_Tissue_Sigmas = formatTissues(stats.tissueSigmas);
     const { componentCount, removedVoxels } = stats.supportCleanup;
     console.log(
-      `[CAT-lite] means ${statData.CAT_Lite_Tissue_Means}; sigmas ${statData.CAT_Lite_Tissue_Sigmas}; ` +
+      `[PVE] means ${statData.PVE_Tissue_Means}; sigmas ${statData.PVE_Tissue_Sigmas}; ` +
       `removed ${removedVoxels} voxels outside the largest of ${componentCount} support components`
     );
   } else {
     statData.Partial_Volume = `Skipped: ${stats.reason}`;
-    console.warn(`[CAT-lite] skipped: ${stats.reason}`);
+    console.warn(`[PVE] skipped: ${stats.reason}`);
   }
   return tissues;
 }

@@ -23,6 +23,7 @@ import {
   NIFTI_DT,
   NIFTI_INTENT_LABEL,
   NIFTI_INTENT_NONE,
+  type NiftiTypedArray,
 } from './nifti.js'
 import { sha256Prefix8 } from './sha256.js'
 import { conformVolumeData, INFERENCE_CONFORM_FHIGH } from './conform-volume.js'
@@ -46,12 +47,12 @@ declare const __BC_VERSION__: string | undefined
 const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.0.0'
 
 /** Reject all-NaN or constant (e.g. all-zero) inputs before conform/inference. */
-function assertNonConstantInput(data: ArrayLike<number>): void {
+function assertNonConstantInput(data: NiftiTypedArray): void {
   let finite = 0
   let vmin = Infinity
   let vmax = -Infinity
   for (let i = 0; i < data.length; i++) {
-    const v = data[i]
+    const v = Number(data[i])
     if (Number.isFinite(v)) {
       finite++
       if (v < vmin) vmin = v

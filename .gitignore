@@ -54,6 +54,7 @@ plan_*.md
 !/test/baseline_cases.txt
 !/test/nii_diff.py
 !/test/nii_dice.py
+!/test/mindgrab_scaling.py
 !/test/cpu_turbo_check.c
 !/test/cpu_sme_check.c
 !/test/cuda_module_smoke.c

@@ -1603,6 +1603,7 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	python3 ../test/nii_diff.py $(TEST_MG) $(BC_TMP)/bc-mg-test.nii.gz 0
 	./$(exe_mindgrab) -cpu 3 --no-turbo -o $(BC_TMP)/bc-mg-threads.nii.gz $(TEST_IN)
 	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-mg-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-mg-test.nii.gz","rb").read(), "MindGrab output depends on the thread count"'
+	python3 ../test/mindgrab_scaling.py ./$(exe_mindgrab) $(TEST_2MM)
 	./$(exe_model16chan18cls) -cpu 0 --no-turbo --save-conform -o $(BC_TMP)/bc-m16-conf-test.nii.gz $(TEST_IN)
 	python3 ../test/nii_diff.py $(TEST_M16) $(BC_TMP)/bc-m16-conf-test.nii.gz 0
 	./$(exe_model16chan18cls) -cpu 0 --no-turbo -o $(BC_TMP)/bc-m16-native-test.nii.gz $(TEST_2MM)

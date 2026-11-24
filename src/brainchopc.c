@@ -249,18 +249,27 @@ static int scaled_integer_input(const nifti_image *image) {
 	}
 }
 
+static int stored_voxel_less(const nifti_image *image, size_t a, size_t b) {
+	/* Adjacent 64-bit integers can round to the same double in voxel(). */
+	if(image->datatype==DT_INT64) {
+		const int64_t *data=image->data;
+		return data[a]<data[b];
+	}
+	if(image->datatype==DT_UINT64) {
+		const uint64_t *data=image->data;
+		return data[a]<data[b];
+	}
+	return voxel(image,a)<voxel(image,b);
+}
+
 static void mask_scaled_input(nifti_image *image, const float *mask) {
 	/* Preserve the input encoding. The lowest decoded intensity is at the
 	 * largest stored value when the slope is negative. */
 	size_t background=0;
-	double extreme=voxel(image,0);
 	int descending=image->scl_slope<0.0;
 	for(size_t i=1;i<(size_t)image->nvox;i++) {
-		double value=voxel(image,i);
-		if(descending ? value>extreme : value<extreme) {
+		if(descending ? stored_voxel_less(image,background,i) : stored_voxel_less(image,i,background))
 			background=i;
-			extreme=value;
-		}
 	}
 	size_t width=(size_t)image->nbyper;
 	unsigned char *data=image->data;

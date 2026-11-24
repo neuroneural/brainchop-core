@@ -552,9 +552,10 @@ static int segment_checked(const bc_backend *backend, const nifti_image *image,
 }
 
 static int run_model(nifti_image *original, int input_datatype,
-		int mindgrab_output, int preserve_encoding, const float *weights, const bc_backend *backend,
+		int mindgrab_output, const float *weights, const bc_backend *backend,
 		int allow_fallback, const bc_cli_options *cli, nifti_image **output) {
 	*output=NULL;
+	int preserve_encoding=mindgrab_output && scaled_integer_input(original);
 	bc_stage(NULL);
 	nifti_image *conformed=private_image_copy(original);
 	if (!conformed) return 1;
@@ -938,7 +939,7 @@ int main(int argc, char **argv) {
 	int preserve_encoding=mindgrab_output && scaled_integer_input(nim);
 	if ((!preserve_encoding &&
 		 (brainchopc_convert(nim,DT_FLOAT32) || sanitize_input(nim,input_datatype))) ||
-	    run_model(nim,input_datatype,mindgrab_output,preserve_encoding,weights,backend,automatic_backend,
+	    run_model(nim,input_datatype,mindgrab_output,weights,backend,automatic_backend,
 			&cli,&output)) {
 		free(weights);nifti_image_free(nim); return 1;
 	}

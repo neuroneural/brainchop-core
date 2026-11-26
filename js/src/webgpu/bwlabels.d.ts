@@ -44,3 +44,5 @@ export declare function growMaskBorderMm<T extends Uint8Array | Float32Array>(
   dz: number,
   millimeters: number,
 ): T
+
+export declare function releaseBwLabelScratch(): void

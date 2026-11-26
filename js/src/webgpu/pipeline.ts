@@ -22,12 +22,11 @@ import {
   NIFTI_DT,
   NIFTI_INTENT_LABEL,
   NIFTI_INTENT_NONE,
-  type NiftiTypedArray,
 } from './nifti.js'
 import { sha256Prefix8 } from './sha256.js'
 import { conformVolumeData, INFERENCE_CONFORM_FHIGH } from './conform-volume.js'
 import { resliceVolumeData, invertAffine4x4, mulAffine4x4 } from './reslice-volume.js'
-import { BWLabeler, largestBinaryComponent26, growMaskBorderMm } from './bwlabels.js'
+import { BWLabeler, largestBinaryComponent26, growMaskBorderMm, releaseBwLabelScratch } from './bwlabels.js'
 import { validateCategoricalSegmentation } from './segmentation-quality.js'
 import {
   computeQuantiles,
@@ -43,28 +42,7 @@ import { setupNet, releaseV4Workspace, type V4ExecuteFn } from './meshnet_fast_v
 
 /** Set by esbuild from js/package.json; falls back when run unbundled in tests. */
 declare const __BC_VERSION__: string | undefined
-const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.1.0'
-
-/** Reject all-NaN or constant (e.g. all-zero) inputs before conform/inference. */
-function assertNonConstantInput(data: NiftiTypedArray): void {
-  let finite = 0
-  let vmin = Infinity
-  let vmax = -Infinity
-  for (let i = 0; i < data.length; i++) {
-    const v = Number(data[i])
-    if (Number.isFinite(v)) {
-      finite++
-      if (v < vmin) vmin = v
-      if (v > vmax) vmax = v
-    }
-  }
-  if (finite === 0) {
-    throw new Error('brainchopc: input has no finite voxels')
-  }
-  if (vmin === vmax) {
-    throw new Error(`brainchopc: input image is constant (all ${finite} finite voxels equal ${vmin}; zero contrast)`)
-  }
-}
+const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.1.1'
 
 const CONFORM_DIM = 256
 const CONFORM_SHAPE: [number, number, number] = [CONFORM_DIM, CONFORM_DIM, CONFORM_DIM]
@@ -107,10 +85,66 @@ const MODEL_BIN_CACHE_MAX = 4
 const rawModelBinCache = new Map<string, Uint8Array>()
 const inflightModelBin = new Map<string, Promise<Uint8Array>>()
 
-// Reuse one acquired GPUDevice per thread so compiled WGSL pipelines stay warm
-// across repeated calls, while still destroying all activation/weight buffers
-// in `finally` so zero GPU memory is retained when idle.
+// Reuse one acquired GPUDevice and pooled V4 workspace per thread across warm
+// calls so compiled WGSL pipelines and ~1 GiB activation buffers stay hot.
+// Idle timeout, device loss, any error/validation failure, or explicit teardown
+// releases every pooled GPU buffer deterministically.
+const WORKSPACE_IDLE_MS = 60_000
 let sharedOwnedDevice: GPUDevice | null = null
+const workspaceIdleTimers = new WeakMap<GPUDevice, ReturnType<typeof setTimeout>>()
+const workspaceLostHooked = new WeakSet<GPUDevice>()
+const activeWorkspaceDevices = new Set<GPUDevice>()
+const sharedBwScratch: Record<string, unknown> = { il: null, tt: null, runs: null, runLen: 0, dirty: false }
+
+function clearWorkspaceTimer(dev: GPUDevice): void {
+  const t = workspaceIdleTimers.get(dev)
+  if (t !== undefined) {
+    clearTimeout(t)
+    workspaceIdleTimers.delete(dev)
+  }
+}
+
+function releaseDeviceWorkspace(dev: GPUDevice | null | undefined): void {
+  if (!dev) return
+  clearWorkspaceTimer(dev)
+  activeWorkspaceDevices.delete(dev)
+  try { releaseV4Workspace(dev) } catch { /* ignore */ }
+}
+
+function scheduleWorkspaceRelease(dev: GPUDevice): void {
+  clearWorkspaceTimer(dev)
+  activeWorkspaceDevices.add(dev)
+  if (!workspaceLostHooked.has(dev) && dev.lost && typeof dev.lost.then === 'function') {
+    workspaceLostHooked.add(dev)
+    dev.lost.then(() => {
+      releaseDeviceWorkspace(dev)
+      if (sharedOwnedDevice === dev) sharedOwnedDevice = null
+    }).catch(() => {})
+  }
+  const timer = setTimeout(() => {
+    releaseDeviceWorkspace(dev)
+  }, WORKSPACE_IDLE_MS)
+  if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+    ;(timer as unknown as { unref: () => void }).unref()
+  }
+  workspaceIdleTimers.set(dev, timer)
+}
+
+/** Release pooled GPU workspaces, owned GPUDevice, and reusable CPU scratch buffers. */
+export function disposeWebGpuResources(): void {
+  for (const dev of Array.from(activeWorkspaceDevices)) {
+    releaseDeviceWorkspace(dev)
+  }
+  if (sharedOwnedDevice) {
+    resetOwnedDevice(sharedOwnedDevice)
+  }
+  sharedBwScratch.il = null
+  sharedBwScratch.tt = null
+  sharedBwScratch.runs = null
+  sharedBwScratch.runLen = 0
+  sharedBwScratch.dirty = false
+  releaseBwLabelScratch()
+}
 
 async function getOwnedDevice(model: ModelName): Promise<GPUDevice> {
   if (sharedOwnedDevice && !(sharedOwnedDevice as GPUDevice & { __isLost?: boolean }).__isLost) {
@@ -124,7 +158,7 @@ async function getOwnedDevice(model: ModelName): Promise<GPUDevice> {
 
 function resetOwnedDevice(failedDevice: GPUDevice | null): void {
   if (failedDevice) {
-    try { releaseV4Workspace(failedDevice) } catch { /* ignore */ }
+    releaseDeviceWorkspace(failedDevice)
     if (!(failedDevice as GPUDevice & { __isLost?: boolean }).__isLost) {
       try { failedDevice.destroy() } catch { /* ignore */ }
     }
@@ -332,7 +366,7 @@ async function runV4Inference(params: {
   log: string[]
   record: (line: string) => void
   reportProgress: ReturnType<typeof createProgressReporter>
-}): Promise<Array<Uint8Array | Float32Array>> {
+}): Promise<{ outputs: Array<Uint8Array | Float32Array>; device: GPUDevice }> {
   const {
     canonical,
     model,
@@ -356,11 +390,13 @@ async function runV4Inference(params: {
   const totalLayers = canonical === 'mindgrab' ? 25 : 13
 
   const runAttempt = async (dev: GPUDevice, entry: Record<string, unknown>) => {
+    clearWorkspaceTimer(dev)
     const hasScopes =
       typeof dev.pushErrorScope === 'function' && typeof dev.popErrorScope === 'function'
     let oomScopeOpen = false
     let execute: V4ExecuteFn | null = null
     let timer: ReturnType<typeof setTimeout> | undefined
+    let succeeded = false
 
     if (hasScopes) {
       dev.pushErrorScope('out-of-memory')
@@ -430,7 +466,8 @@ async function runV4Inference(params: {
         }
       }
 
-      return outputs
+      succeeded = true
+      return { outputs, device: dev }
     } catch (error) {
       if (oomScopeOpen) {
         oomScopeOpen = false
@@ -447,12 +484,14 @@ async function runV4Inference(params: {
       const exec = execute as V4ExecuteFn | null
       if (exec) {
         try {
-          exec.dispose({ keepSharedWorkspace: false })
+          exec.dispose({ keepSharedWorkspace: succeeded })
         } catch { /* ignore */ }
       }
-      try {
-        releaseV4Workspace(dev)
-      } catch { /* ignore */ }
+      if (succeeded) {
+        scheduleWorkspaceRelease(dev)
+      } else {
+        releaseDeviceWorkspace(dev)
+      }
     }
   }
 
@@ -541,7 +580,6 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
   let orig
   try {
     orig = readNifti1(request.input)
-    assertNonConstantInput(orig.data)
   } catch (err) {
     await weightsPromise.catch(() => {})
     throw new BrainchopError(
@@ -551,7 +589,8 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
     )
   }
 
-  // 2. Conform to 256^3 1mm LIA uint8 (fHigh = 0.98, optional CT Cormack & comply)
+  // 2. Conform to 256^3 1mm LIA uint8 (fHigh = 0.98, optional CT Cormack & comply;
+  //    constant / all-NaN rejection fused into the single decode pass)
   reportProgress('conform', 0.15, { message: 'Conforming volume to 256^3' })
   let conformed
   try {
@@ -568,6 +607,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       fHigh: INFERENCE_CONFORM_FHIGH,
       ct: Boolean(request.ct),
       comply: Boolean(request.comply),
+      rejectConstant: true,
     })
   } catch (err) {
     await weightsPromise.catch(() => {})
@@ -603,7 +643,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
   // 4. Fetch weights & run V4 WebGPU inference
   const weightBytes = await weightsPromise
   const segDescrip = `brainchop ${BC_VERSION} ${canonical}/${await sha256Prefix8(weightBytes)} webgpu`
-  const outputs = await runV4Inference({
+  const { outputs, device: usedDevice } = await runV4Inference({
     canonical,
     model: request.model,
     weightBytes,
@@ -620,71 +660,214 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
     reportProgress,
   })
 
-  const rawOut = outputs[0]
-  if (!rawOut || rawOut.length !== CONFORM_NVOX) {
-    const msg = `brainchopc: unexpected WebGPU output length (${rawOut?.length ?? 0})`
-    record(msg)
-    throw new BrainchopError('inference-failed', msg, log)
-  }
-  const rawLabels = rawOut instanceof Uint8Array ? rawOut : new Uint8Array(rawOut)
-
-  // 5. Quality validation & connected-component postprocessing
-  reportProgress('postprocess', 0.85, { message: 'Post-processing segmentation' })
-  const origDims: [number, number, number] = [
-    orig.header.dims[1],
-    orig.header.dims[2],
-    orig.header.dims[3],
-  ]
-
-  if (canonical === 'mindgrab') {
-    let hasFg = false
-    for (let i = 0; i < CONFORM_NVOX; i++) {
-      if (rawLabels[i] > 0) { hasFg = true; break }
-    }
-    if (!hasFg) {
-      const msg = 'mindgrab: the network found no brain; check the input contrast'
+  try {
+    const rawOut = outputs[0]
+    if (!rawOut || rawOut.length !== CONFORM_NVOX) {
+      const msg = `brainchopc: unexpected WebGPU output length (${rawOut?.length ?? 0})`
       record(msg)
       throw new BrainchopError('inference-failed', msg, log)
     }
+    const rawLabels = rawOut instanceof Uint8Array ? rawOut : new Uint8Array(rawOut)
 
-    // 26-connected binary LCC (matches src/brainchopc.c:628)
-    largestBinaryComponent26(rawLabels, CONFORM_SHAPE, true)
+    // 5. Quality validation & connected-component postprocessing
+    reportProgress('postprocess', 0.85, { message: 'Post-processing segmentation' })
+    const origDims: [number, number, number] = [
+      orig.header.dims[1],
+      orig.header.dims[2],
+      orig.header.dims[3],
+    ]
 
-    // Optional Euclidean border dilation in mm (matches src/brainchopc.c:633-639)
-    if (request.borderMm && request.borderMm > 0) {
-      growMaskBorderMm(rawLabels, CONFORM_SHAPE, 1, 1, 1, request.borderMm)
-    }
-    reportProgress('reslice', 0.93, { message: 'Applying brain mask in native space' })
+    if (canonical === 'mindgrab') {
+      let hasFg = false
+      for (let i = 0; i < CONFORM_NVOX; i++) {
+        if (rawLabels[i] > 0) { hasFg = true; break }
+      }
+      if (!hasFg) {
+        const msg = 'mindgrab: the network found no brain; check the input contrast'
+        record(msg)
+        throw new BrainchopError('inference-failed', msg, log)
+      }
 
-    if (!isValidAffine4x4(orig.header.stoXyz)) {
-      const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
-      record(msg)
-      throw new BrainchopError('bad-input', msg, log)
-    }
+      // 26-connected binary LCC (matches src/brainchopc.c:628)
+      largestBinaryComponent26(rawLabels, CONFORM_SHAPE, true)
 
-    let nativeMask: Uint8Array
-    if (isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)) {
-      nativeMask = rawLabels
-    } else {
-      const resliced = resliceVolumeData({
-        srcImg: rawLabels,
-        srcDims: CONFORM_SHAPE,
-        srcAffine: flatToNested4x4(conformed.affine),
-        dstDims: origDims,
-        dstAffine: flatToNested4x4(orig.header.stoXyz),
-        isLabel: false,
-        isProbability: false,
-        dstTypedArrayKind: 'Uint8Array',
+      // Optional Euclidean border dilation in mm (matches src/brainchopc.c:633-639)
+      if (request.borderMm && request.borderMm > 0) {
+        growMaskBorderMm(rawLabels, CONFORM_SHAPE, 1, 1, 1, request.borderMm)
+      }
+      reportProgress('reslice', 0.93, { message: 'Applying brain mask in native space' })
+
+      if (!isValidAffine4x4(orig.header.stoXyz)) {
+        const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+        record(msg)
+        throw new BrainchopError('bad-input', msg, log)
+      }
+
+      let nativeMask: Uint8Array
+      if (isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)) {
+        nativeMask = rawLabels
+      } else {
+        const resliced = resliceVolumeData({
+          srcImg: rawLabels,
+          srcDims: CONFORM_SHAPE,
+          srcAffine: flatToNested4x4(conformed.affine),
+          dstDims: origDims,
+          dstAffine: flatToNested4x4(orig.header.stoXyz),
+          isLabel: false,
+          isProbability: false,
+          dstTypedArrayKind: 'Uint8Array',
+        })
+        nativeMask = resliced.img as Uint8Array
+      }
+
+      // Optional binary mask NIfTI (matches write_mask in src/brainchopc.c:346-370)
+      let maskBytes: Uint8Array | undefined
+      if (request.mask || request.borderMm !== undefined) {
+        const binMask = new Uint8Array(nativeMask.length)
+        for (let i = 0; i < nativeMask.length; i++) binMask[i] = nativeMask[i] > 0 ? 1 : 0
+        maskBytes = writeNifti1(orig.header, binMask, {
+          datatypeCode: NIFTI_DT.UINT8,
+          sclSlope: 1,
+          sclInter: 0,
+          calMin: 0,
+          calMax: 0,
+          intentCode: NIFTI_INTENT_LABEL,
+          descrip: segDescrip,
+        })
+      }
+
+      // Apply mask to native input volume, preserving native integer encoding and
+      // NIfTI scaling (matches mask_integer_input / float path in src/brainchopc.c).
+      const masked = maskMindGrabVolume(
+        orig.data,
+        orig.header.datatypeCode,
+        orig.header.sclSlope,
+        orig.header.sclInter,
+        nativeMask,
+      )
+      const imageBytes = writeNifti1(orig.header, masked.data, {
+        datatypeCode: orig.header.datatypeCode,
+        sclSlope: masked.sclSlope,
+        sclInter: masked.sclInter,
+        descrip: segDescrip,
       })
-      nativeMask = resliced.img as Uint8Array
+
+      const elapsedMs = performance.now() - started
+      reportProgress('complete', 1.0, { message: 'Done' })
+      return { image: imageBytes, mask: maskBytes, elapsedMs }
     }
 
-    // Optional binary mask NIfTI (matches write_mask in src/brainchopc.c:346-370)
-    let maskBytes: Uint8Array | undefined
-    if (request.mask || request.borderMm !== undefined) {
-      const binMask = new Uint8Array(nativeMask.length)
-      for (let i = 0; i < nativeMask.length; i++) binMask[i] = nativeMask[i] > 0 ? 1 : 0
-      maskBytes = writeNifti1(orig.header, binMask, {
+    // Categorical label models (mindmap-fast / 16chan18cls, mindmap, mindsnap)
+    let foreground = 0
+    for (let i = 0; i < CONFORM_NVOX; i++) {
+      if (rawLabels[i] !== 0) foreground++
+    }
+    if (foreground === 0) {
+      const msg = `brainchopc: categorical foreground is 0/${CONFORM_NVOX} voxels; segmentation is empty`
+      record(msg)
+      throw new BrainchopError('inference-failed', msg, log)
+    }
+    try {
+      validateCategoricalSegmentation(rawLabels)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      record(`brainchopc: ${msg}`)
+      throw new BrainchopError('inference-failed', msg, log)
+    }
+
+    let cleanedLabels: Uint8Array
+    if (request.legacyCleanup) {
+      // Still check noise fragmentation cap before legacy cleanup
+      const bw = new BWLabeler()
+      const [guardCount] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false, sharedBwScratch)
+      const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
+      if (guardCount > noiseCap) {
+        const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
+        record(msg)
+        throw new BrainchopError('inference-failed', msg, log)
+      }
+      cleanedLabels = largestBinaryComponent26(rawLabels, CONFORM_SHAPE, false)
+    } else {
+      const bw = new BWLabeler()
+      const [guardCount, guardLabels] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false, sharedBwScratch)
+      const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
+      if (guardCount > noiseCap) {
+        const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
+        record(msg)
+        throw new BrainchopError('inference-failed', msg, log)
+      }
+      if (canonical === 'mindsnap') {
+        const [, res] = bw.filterHierarchicalFromLabels(
+          rawLabels,
+          guardCount,
+          guardLabels,
+          CONFORM_SHAPE,
+          'all',
+          true,
+          true,
+          DK104_CORTICAL_FAMILY_OF,
+          true,
+        )
+        cleanedLabels = res instanceof Uint8Array ? res : new Uint8Array(res)
+      } else {
+        const [, res] = bw.filter18ClassFromLabels(
+          rawLabels,
+          guardCount,
+          guardLabels,
+          CONFORM_SHAPE,
+          TARGET_CLASSES_18,
+          true,
+          null,
+          true,
+        )
+        cleanedLabels = res instanceof Uint8Array ? res : new Uint8Array(res)
+      }
+    }
+
+    // 6. Reslice to native grid (default) or emit conformed 256^3 grid (--save-conform)
+    reportProgress('reslice', 0.93, {
+      message: request.saveConform ? 'Encoding conformed NIfTI' : 'Reslicing labels to native space',
+    })
+
+    let imageBytes: Uint8Array
+    if (request.saveConform) {
+      imageBytes = writeNifti1(orig.header, cleanedLabels, {
+        dims: CONFORM_SHAPE,
+        pixDims: [1, 1, 1],
+        affine: conformed.affine,
+        datatypeCode: NIFTI_DT.UINT8,
+        sclSlope: 1,
+        sclInter: 0,
+        calMin: 0,
+        calMax: 0,
+        intentCode: NIFTI_INTENT_LABEL,
+        descrip: segDescrip,
+      })
+    } else {
+      if (!isValidAffine4x4(orig.header.stoXyz)) {
+        const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+        record(msg)
+        throw new BrainchopError('bad-input', msg, log)
+      }
+      let nativeLabels: Uint8Array
+      if (isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)) {
+        nativeLabels = cleanedLabels
+      } else {
+        const resliced = resliceVolumeData({
+          srcImg: cleanedLabels,
+          srcDims: CONFORM_SHAPE,
+          srcAffine: flatToNested4x4(conformed.affine),
+          dstDims: origDims,
+          dstAffine: flatToNested4x4(orig.header.stoXyz),
+          isLabel: true,
+          labelOutputType: 'uint8',
+        })
+        nativeLabels = resliced.img as Uint8Array
+      }
+      imageBytes = writeNifti1(orig.header, nativeLabels, {
+        dims: origDims,
+        affine: orig.header.stoXyz,
+        preservePixDims: [orig.header.pixDims[1], orig.header.pixDims[2], orig.header.pixDims[3]],
         datatypeCode: NIFTI_DT.UINT8,
         sclSlope: 1,
         sclInter: 0,
@@ -695,151 +878,15 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       })
     }
 
-    // Apply mask to native input volume, preserving native integer encoding and
-    // NIfTI scaling (matches mask_integer_input / float path in src/brainchopc.c).
-    const masked = maskMindGrabVolume(
-      orig.data,
-      orig.header.datatypeCode,
-      orig.header.sclSlope,
-      orig.header.sclInter,
-      nativeMask,
-    )
-    const imageBytes = writeNifti1(orig.header, masked.data, {
-      datatypeCode: orig.header.datatypeCode,
-      sclSlope: masked.sclSlope,
-      sclInter: masked.sclInter,
-      descrip: segDescrip,
-    })
-
     const elapsedMs = performance.now() - started
     reportProgress('complete', 1.0, { message: 'Done' })
-    return { image: imageBytes, mask: maskBytes, elapsedMs }
-  }
-
-  // Categorical label models (mindmap-fast / 16chan18cls, mindmap, mindsnap)
-  let foreground = 0
-  for (let i = 0; i < CONFORM_NVOX; i++) {
-    if (rawLabels[i] !== 0) foreground++
-  }
-  if (foreground === 0) {
-    const msg = `brainchopc: categorical foreground is 0/${CONFORM_NVOX} voxels; segmentation is empty`
-    record(msg)
-    throw new BrainchopError('inference-failed', msg, log)
-  }
-  try {
-    validateCategoricalSegmentation(rawLabels)
+    return { image: imageBytes, elapsedMs }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    record(`brainchopc: ${msg}`)
-    throw new BrainchopError('inference-failed', msg, log)
+    // Release pooled GPU workspace on any post-inference failure so callers
+    // holding a custom GPUDevice observe zero leaked live buffers.
+    releaseDeviceWorkspace(usedDevice)
+    throw err
   }
-
-  let cleanedLabels: Uint8Array
-  if (request.legacyCleanup) {
-    // Still check noise fragmentation cap before legacy cleanup
-    const bw = new BWLabeler()
-    const [guardCount] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false)
-    const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
-    if (guardCount > noiseCap) {
-      const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
-      record(msg)
-      throw new BrainchopError('inference-failed', msg, log)
-    }
-    cleanedLabels = largestBinaryComponent26(rawLabels, CONFORM_SHAPE, false)
-  } else {
-    const bw = new BWLabeler()
-    const [guardCount, guardLabels] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false)
-    const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
-    if (guardCount > noiseCap) {
-      const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
-      record(msg)
-      throw new BrainchopError('inference-failed', msg, log)
-    }
-    if (canonical === 'mindsnap') {
-      const [, res] = bw.filterHierarchicalFromLabels(
-        rawLabels,
-        guardCount,
-        guardLabels,
-        CONFORM_SHAPE,
-        'all',
-        true,
-        true,
-        DK104_CORTICAL_FAMILY_OF,
-        true,
-      )
-      cleanedLabels = res instanceof Uint8Array ? res : new Uint8Array(res)
-    } else {
-      const [, res] = bw.filter18ClassFromLabels(
-        rawLabels,
-        guardCount,
-        guardLabels,
-        CONFORM_SHAPE,
-        TARGET_CLASSES_18,
-        true,
-        null,
-        true,
-      )
-      cleanedLabels = res instanceof Uint8Array ? res : new Uint8Array(res)
-    }
-  }
-
-  // 6. Reslice to native grid (default) or emit conformed 256^3 grid (--save-conform)
-  reportProgress('reslice', 0.93, {
-    message: request.saveConform ? 'Encoding conformed NIfTI' : 'Reslicing labels to native space',
-  })
-
-  let imageBytes: Uint8Array
-  if (request.saveConform) {
-    imageBytes = writeNifti1(orig.header, cleanedLabels, {
-      dims: CONFORM_SHAPE,
-      pixDims: [1, 1, 1],
-      affine: conformed.affine,
-      datatypeCode: NIFTI_DT.UINT8,
-      sclSlope: 1,
-      sclInter: 0,
-      calMin: 0,
-      calMax: 0,
-      intentCode: NIFTI_INTENT_LABEL,
-      descrip: segDescrip,
-    })
-  } else {
-    if (!isValidAffine4x4(orig.header.stoXyz)) {
-      const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
-      record(msg)
-      throw new BrainchopError('bad-input', msg, log)
-    }
-    let nativeLabels: Uint8Array
-    if (isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)) {
-      nativeLabels = cleanedLabels
-    } else {
-      const resliced = resliceVolumeData({
-        srcImg: cleanedLabels,
-        srcDims: CONFORM_SHAPE,
-        srcAffine: flatToNested4x4(conformed.affine),
-        dstDims: origDims,
-        dstAffine: flatToNested4x4(orig.header.stoXyz),
-        isLabel: true,
-        labelOutputType: 'uint8',
-      })
-      nativeLabels = resliced.img as Uint8Array
-    }
-    imageBytes = writeNifti1(orig.header, nativeLabels, {
-      dims: origDims,
-      affine: orig.header.stoXyz,
-      preservePixDims: [orig.header.pixDims[1], orig.header.pixDims[2], orig.header.pixDims[3]],
-      datatypeCode: NIFTI_DT.UINT8,
-      sclSlope: 1,
-      sclInter: 0,
-      calMin: 0,
-      calMax: 0,
-      intentCode: NIFTI_INTENT_LABEL,
-      descrip: segDescrip,
-    })
-  }
-
-  const elapsedMs = performance.now() - started
-  reportProgress('complete', 1.0, { message: 'Done' })
-  return { image: imageBytes, elapsedMs }
 }
 
 /**
@@ -865,7 +912,6 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   let orig
   try {
     orig = readNifti1(request.input)
-    assertNonConstantInput(orig.data)
   } catch (err) {
     await weightsPromise.catch(() => {})
     throw new BrainchopError(
@@ -875,7 +921,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
     )
   }
 
-  // 2. Conform to 256^3 1mm LIA uint8 (fHigh = 0.98)
+  // 2. Conform to 256^3 1mm LIA uint8 (fHigh = 0.98; constant rejection fused)
   reportProgress('conform', 0.15, { message: 'Conforming volume to 256^3' })
   let conformed
   try {
@@ -892,6 +938,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
       fHigh: INFERENCE_CONFORM_FHIGH,
       ct: Boolean(request.ct),
       comply: Boolean(request.comply),
+      rejectConstant: true,
     })
   } catch (err) {
     await weightsPromise.catch(() => {})
@@ -915,7 +962,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
   // 4. Fetch weights & run V4 WebGPU grouped tissue-prior inference
   const weightBytes = await weightsPromise
   const pveDescrip = `brainchop ${BC_VERSION} ${canonical}/${await sha256Prefix8(weightBytes)} webgpu pve`
-  const outputs = await runV4Inference({
+  const { outputs, device: usedDevice } = await runV4Inference({
     canonical,
     model: request.model,
     weightBytes,
@@ -932,66 +979,91 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
     reportProgress,
   })
 
-  if (outputs.length !== 3) {
-    const msg = `brainchopc: PVE expected 3 tissue priors, got ${outputs.length}`
-    record(msg)
-    throw new BrainchopError('inference-failed', msg, log)
-  }
+  try {
+    if (outputs.length !== 3) {
+      const msg = `brainchopc: PVE expected 3 tissue priors, got ${outputs.length}`
+      record(msg)
+      throw new BrainchopError('inference-failed', msg, log)
+    }
 
-  const priors = outputs.map((arr) =>
-    arr instanceof Float32Array ? arr : Float32Array.from(arr),
-  )
-  validateNonZeroFloat32(priors[0], 'GM', log, record)
-  validateNonZeroFloat32(priors[1], 'WM', log, record)
-  validateNonZeroFloat32(priors[2], 'CSF', log, record)
-
-  // 5. Partial-volume tissue fitting
-  reportProgress('postprocess', 0.85, { message: 'Fitting partial-volume tissues' })
-  const { tissues, stats } = applyCatLitePartialVolume(
-    priors,
-    catLiteIntensity,
-    CONFORM_SHAPE,
-    CAT_LITE_OPTIONS,
-  )
-  if (stats.applied && stats.tissueMeans && stats.tissueSigmas) {
-    record(
-      `[PVE] means CSF=${stats.tissueMeans.csf.toFixed(3)} GM=${stats.tissueMeans.gray.toFixed(3)} WM=${stats.tissueMeans.white.toFixed(3)}; ` +
-      `sigmas CSF=${stats.tissueSigmas.csf.toFixed(3)} GM=${stats.tissueSigmas.gray.toFixed(3)} WM=${stats.tissueSigmas.white.toFixed(3)}`,
+    const priors = outputs.map((arr) =>
+      arr instanceof Float32Array ? arr : Float32Array.from(arr),
     )
-  } else if (!stats.applied) {
-    record(`[PVE] skipped: ${stats.reason ?? 'unknown'}`)
-  }
+    validateNonZeroFloat32(priors[0], 'GM', log, record)
+    validateNonZeroFloat32(priors[1], 'WM', log, record)
+    validateNonZeroFloat32(priors[2], 'CSF', log, record)
 
-  const [gmMap, wmMap, csfMap] = tissues
-  const brainMap = new Float32Array(CONFORM_NVOX)
-  for (let i = 0; i < CONFORM_NVOX; i++) {
-    brainMap[i] = gmMap[i] + wmMap[i]
-  }
+    // 5. Partial-volume tissue fitting
+    reportProgress('postprocess', 0.85, { message: 'Fitting partial-volume tissues' })
+    const { tissues, stats } = applyCatLitePartialVolume(
+      priors,
+      catLiteIntensity,
+      CONFORM_SHAPE,
+      CAT_LITE_OPTIONS,
+    )
+    if (stats.applied && stats.tissueMeans && stats.tissueSigmas) {
+      record(
+        `[PVE] means CSF=${stats.tissueMeans.csf.toFixed(3)} GM=${stats.tissueMeans.gray.toFixed(3)} WM=${stats.tissueMeans.white.toFixed(3)}; ` +
+        `sigmas CSF=${stats.tissueSigmas.csf.toFixed(3)} GM=${stats.tissueSigmas.gray.toFixed(3)} WM=${stats.tissueSigmas.white.toFixed(3)}`,
+      )
+    } else if (!stats.applied) {
+      record(`[PVE] skipped: ${stats.reason ?? 'unknown'}`)
+    }
 
-  // 6. Encode (and optionally reslice trilinearly to native space)
-  reportProgress('reslice', 0.93, {
-    message: request.saveConform ? 'Encoding conformed tissue maps' : 'Reslicing tissue maps to native space',
-  })
+    const [gmMap, wmMap, csfMap] = tissues
+    const brainMap = new Float32Array(CONFORM_NVOX)
+    for (let i = 0; i < CONFORM_NVOX; i++) {
+      brainMap[i] = gmMap[i] + wmMap[i]
+    }
 
-  const origDims: [number, number, number] = [
-    orig.header.dims[1],
-    orig.header.dims[2],
-    orig.header.dims[3],
-  ]
-  if (!request.saveConform && !isValidAffine4x4(orig.header.stoXyz)) {
-    const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
-    record(msg)
-    throw new BrainchopError('bad-input', msg, log)
-  }
-  const sameGrid = !request.saveConform &&
-    isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)
+    // 6. Encode (and optionally reslice trilinearly to native space)
+    reportProgress('reslice', 0.93, {
+      message: request.saveConform ? 'Encoding conformed tissue maps' : 'Reslicing tissue maps to native space',
+    })
 
-  const encodeTissue = (map: Float32Array): Uint8Array => {
-    if (request.saveConform) {
-      return writeNifti1(orig.header, quantizeFractionToU8(map), {
-        dims: CONFORM_SHAPE,
-        pixDims: [1, 1, 1],
-        affine: conformed.affine,
+    const origDims: [number, number, number] = [
+      orig.header.dims[1],
+      orig.header.dims[2],
+      orig.header.dims[3],
+    ]
+    if (!request.saveConform && !isValidAffine4x4(orig.header.stoXyz)) {
+      const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+      record(msg)
+      throw new BrainchopError('bad-input', msg, log)
+    }
+    const sameGrid = !request.saveConform &&
+      isSameGrid(CONFORM_SHAPE, conformed.affine, origDims, orig.header.stoXyz)
+
+    const encodeTissue = (map: Float32Array): Uint8Array => {
+      if (request.saveConform) {
+        return writeNifti1(orig.header, quantizeFractionToU8(map), {
+          dims: CONFORM_SHAPE,
+          pixDims: [1, 1, 1],
+          affine: conformed.affine,
+          datatypeCode: NIFTI_DT.UINT8,
+          sclSlope: 1 / 255,
+          sclInter: 0,
+          calMin: 0,
+          calMax: 1,
+          intentCode: NIFTI_INTENT_NONE,
+          descrip: pveDescrip,
+        })
+      }
+      const quantU8 = sameGrid
+        ? quantizeFractionToU8(map)
+        : (resliceVolumeData({
+            srcImg: map,
+            srcDims: CONFORM_SHAPE,
+            srcAffine: flatToNested4x4(conformed.affine),
+            dstDims: origDims,
+            dstAffine: flatToNested4x4(orig.header.stoXyz),
+            isLabel: false,
+            isProbability: true,
+          }).img as Uint8Array)
+      return writeNifti1(orig.header, quantU8, {
+        dims: origDims,
+        affine: orig.header.stoXyz,
+        preservePixDims: [orig.header.pixDims[1], orig.header.pixDims[2], orig.header.pixDims[3]],
         datatypeCode: NIFTI_DT.UINT8,
         sclSlope: 1 / 255,
         sclInter: 0,
@@ -1001,37 +1073,17 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
         descrip: pveDescrip,
       })
     }
-    const quantU8 = sameGrid
-      ? quantizeFractionToU8(map)
-      : (resliceVolumeData({
-          srcImg: map,
-          srcDims: CONFORM_SHAPE,
-          srcAffine: flatToNested4x4(conformed.affine),
-          dstDims: origDims,
-          dstAffine: flatToNested4x4(orig.header.stoXyz),
-          isLabel: false,
-          isProbability: true,
-        }).img as Uint8Array)
-    return writeNifti1(orig.header, quantU8, {
-      dims: origDims,
-      affine: orig.header.stoXyz,
-      preservePixDims: [orig.header.pixDims[1], orig.header.pixDims[2], orig.header.pixDims[3]],
-      datatypeCode: NIFTI_DT.UINT8,
-      sclSlope: 1 / 255,
-      sclInter: 0,
-      calMin: 0,
-      calMax: 1,
-      intentCode: NIFTI_INTENT_NONE,
-      descrip: pveDescrip,
-    })
+
+    const gm = encodeTissue(gmMap)
+    const wm = encodeTissue(wmMap)
+    const csf = encodeTissue(csfMap)
+    const brain = encodeTissue(brainMap)
+
+    const elapsedMs = performance.now() - started
+    reportProgress('complete', 1.0, { message: 'Done' })
+    return { gm, wm, csf, brain, elapsedMs }
+  } catch (err) {
+    releaseDeviceWorkspace(usedDevice)
+    throw err
   }
-
-  const gm = encodeTissue(gmMap)
-  const wm = encodeTissue(wmMap)
-  const csf = encodeTissue(csfMap)
-  const brain = encodeTissue(brainMap)
-
-  const elapsedMs = performance.now() - started
-  reportProgress('complete', 1.0, { message: 'Done' })
-  return { gm, wm, csf, brain, elapsedMs }
 }

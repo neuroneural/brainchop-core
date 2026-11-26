@@ -16,6 +16,7 @@ export declare function conformVolumeData(params: {
   inferenceFHigh?: number | null
   ct?: boolean
   comply?: boolean
+  rejectConstant?: boolean
 }): {
   img: Uint8Array | Float32Array
   inferenceImg?: Uint8Array | null

@@ -771,3 +771,117 @@ test('PVE prior masks cover Brain-Stem (13) in WM and isolate myelinated {7,10,1
   const probe = 12 + 12 * 24 + 12 * 576
   assert.ok(mixed.tissues[0][probe] + mixed.tissues[1][probe] > 0.9, 'no hole in mixed region')
 })
+
+// ---------------------------------------------------------------------------
+// 7. Stage 2 upgrades: persistent singleton worker, fused constant guard,
+//    reusable bwlabels scratch, and mindmap-fast PVE contract refusal
+// ---------------------------------------------------------------------------
+test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persistent worker & PVE contract', async () => {
+  // 1. Fused constant & all-NaN input guard inside conformVolumeData
+  const dims = [3, 4, 4, 4, 1, 1, 1, 1]
+  const affine = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
+  assert.throws(
+    () => conformVolumeData({
+      img: new Float32Array(64).fill(7),
+      datatypeCode: NIFTI_DT.FLOAT32,
+      dims, affine, rejectConstant: true,
+    }),
+    /input image is constant.*all 64 finite voxels equal 7/,
+  )
+  assert.throws(
+    () => conformVolumeData({
+      img: new Float32Array(64).fill(Number.NaN),
+      datatypeCode: NIFTI_DT.FLOAT32,
+      dims, affine, rejectConstant: true,
+    }),
+    /input has no finite voxels/,
+  )
+
+  // 2. Reusable largestBinaryComponent26 scratch leaves zero stale state across repeated calls
+  const shape = [8, 8, 8]
+  const v1 = new Uint8Array(512)
+  // Two components: small (size 2) at x=0..1, large (size 4) at x=4..7
+  v1[0] = 3; v1[1] = 3
+  v1[4] = 5; v1[5] = 5; v1[6] = 5; v1[7] = 5
+  largestBinaryComponent26(v1, shape, false)
+  assert.equal(v1[0], 0); assert.equal(v1[1], 0)
+  assert.equal(v1[4], 5); assert.equal(v1[7], 5)
+
+  const v2 = new Uint8Array(512)
+  // Now largest is at x=0..2 (previously cleared positions!), small at x=6
+  v2[0] = 9; v2[1] = 9; v2[2] = 9
+  v2[6] = 4
+  largestBinaryComponent26(v2, shape, true)
+  assert.equal(v2[0], 1); assert.equal(v2[1], 1); assert.equal(v2[2], 1)
+  assert.equal(v2[6], 0)
+
+  // 3. Persistent singleton worker reuse, timeout reset, disposeWorker(), and mindmap-fast PVE refusal
+  const distIndex = join(repoRoot, 'js', 'dist', 'index.js')
+  if (existsSync(distIndex)) {
+    const mod = await import(`file://${distIndex}?v=${Date.now()}`)
+    // mindmap-fast & 16chan18cls must be refused for segmentTissues (matching model_capabilities.json)
+    for (const m of ['mindmap-fast', '16chan18cls', 'mindgrab', 'mindsnap']) {
+      await assert.rejects(
+        () => mod.segmentTissues(new Uint8Array([1, 2, 3, 4]), { model: m }),
+        (err) => err && err.code === 'unsupported-option',
+        `segmentTissues(${m}) must reject with unsupported-option`,
+      )
+    }
+
+    // Mock global Worker to verify singleton reuse across calls + reset on timeout + disposeWorker()
+    const origWorker = globalThis.Worker
+    let created = 0
+    let terminated = 0
+    let hangNext = false
+    class MockWorker {
+      constructor() {
+        created++
+        this.onmessage = null
+        this.onerror = null
+        this.onmessageerror = null
+      }
+      postMessage() {
+        if (hangNext) return
+        queueMicrotask(() => {
+          this.onmessage?.({
+            data: {
+              type: 'done',
+              image: new Uint8Array(8).buffer,
+              elapsedMs: 1,
+              backend: 'webgpu',
+            },
+          })
+        })
+      }
+      terminate() { terminated++ }
+    }
+    globalThis.Worker = MockWorker
+    try {
+      mod.disposeWorker()
+      const dummy = new Uint8Array([1, 2, 3, 4])
+      const r1 = await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      const r2 = await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      assert.equal(r1.ranInWorker, true)
+      assert.equal(r2.ranInWorker, true)
+      assert.equal(created, 1, 'persistent worker must be reused across warm calls')
+      assert.equal(terminated, 0, 'persistent worker must not terminate after normal completion')
+
+      // Timeout must hard-terminate the wedged worker so next call spawns a fresh one
+      hangNext = true
+      await assert.rejects(
+        () => mod.segment(dummy, { model: 'mindgrab', worker: true, timeoutMs: 20 }),
+        (err) => err && err.code === 'inference-failed',
+      )
+      assert.equal(terminated, 1, 'timeout must terminate stuck worker')
+
+      hangNext = false
+      await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      assert.equal(created, 2, 'fresh worker must be spawned after timeout termination')
+      mod.disposeWorker()
+      assert.equal(terminated, 2, 'disposeWorker() must terminate singleton worker')
+    } finally {
+      mod.disposeWorker()
+      globalThis.Worker = origWorker
+    }
+  }
+})

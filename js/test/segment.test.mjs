@@ -522,7 +522,8 @@ if (BACKENDS.includes('webgpu')) {
   writeFileSync(workerPath, prelude + originalWorker)
   try {
     const failedWorker = await page.evaluate(async ({ origin }) => {
-      const { segment } = await import(`${origin}/index.js`)
+      const { segment, disposeWorker } = await import(`${origin}/index.js`)
+      disposeWorker()
       const bytes = await (await fetch(`${origin}/t1_2mm.nii.gz`)).arrayBuffer(), log = []
       try { await segment(bytes, { model: '16chan18cls', backend: 'webgpu', worker: true,
         onLog: (line) => log.push(line) }); return { code: 'unexpected-success', log } }
@@ -530,7 +531,13 @@ if (BACKENDS.includes('webgpu')) {
     }, { origin: `http://127.0.0.1:${port}` })
     check(failedWorker.code === 'inference-failed' && failedWorker.log.some(l => l.includes('segmentation is empty')),
       'empty GPU labels reject through the worker', JSON.stringify(failedWorker))
-  } finally { writeFileSync(workerPath, originalWorker) }
+  } finally {
+    writeFileSync(workerPath, originalWorker)
+    await page.evaluate(async ({ origin }) => {
+      const { disposeWorker } = await import(`${origin}/index.js`)
+      disposeWorker()
+    }, { origin: `http://127.0.0.1:${port}` })
+  }
 }
 
 // --- per-model entry: its own worker, one model, a refusal for the others ---

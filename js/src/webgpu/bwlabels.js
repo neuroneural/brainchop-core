@@ -95,8 +95,10 @@ export class BWLabeler {
     const nvox = plane * nz
     let label = 1
     const kGrowArrayBy = 8192
-    let ttn = kGrowArrayBy
-    let tt = new Uint32Array(ttn)
+    let tt = (conn === 6 && scratch && scratch.tt && scratch.tt.length >= kGrowArrayBy)
+      ? scratch.tt
+      : new Uint32Array(kGrowArrayBy)
+    let ttn = tt.length
     let il
     if (conn === 6 && scratch && scratch.il && scratch.il.length === nvox) {
       il = scratch.il
@@ -248,6 +250,7 @@ export class BWLabeler {
         tt[i] = j + 1
       }
       if (scratch) {
+        scratch.tt = tt
         scratch.runs = runs
         scratch.runLen = runLen
         scratch.dirty = false
@@ -1523,6 +1526,16 @@ export class BWLabeler {
   }
 }
 
+// Reusable flat typed-array scratchpad for largestBinaryComponent26 (16 MiB
+// visited mask + dynamic queue, zeroed selectively by visited indices so warm
+// calls incur zero 64 MiB GC churn and zero full-volume zeroing passes).
+const sharedLcc26Scratch = { visited: null, queue: null };
+
+export function releaseBwLabelScratch() {
+  sharedLcc26Scratch.visited = null;
+  sharedLcc26Scratch.queue = null;
+}
+
 /**
  * Keep the largest 26-connected nonzero component of a 3D label/mask volume in place.
  * Matches `bwlabel_largest(..., connectivity = 26)` in `src/bwlabel.c`.
@@ -1539,32 +1552,49 @@ export function largestBinaryComponent26(data, dim, binaryOutput = false) {
   const n = nxy * nz;
   if (n < 1 || data.length < n) return data;
 
-  const labels = new Uint32Array(n);
   let fgCount = 0;
   for (let i = 0; i < n; i++) {
     if (data[i] > 0) fgCount++;
   }
   if (fgCount === 0) return data;
 
-  const queue = new Uint32Array(fgCount);
-  let label = 0;
-  let bestLabel = 0;
+  let visited = sharedLcc26Scratch.visited;
+  if (!visited || visited.length !== n) {
+    visited = new Uint8Array(n);
+    sharedLcc26Scratch.visited = visited;
+  }
+  let queue = sharedLcc26Scratch.queue;
+  if (!queue || queue.length < fgCount) {
+    queue = new Uint32Array(Math.max(fgCount, 1 << 20));
+    sharedLcc26Scratch.queue = queue;
+  }
+
+  const is256 = nx === 256 && ny === 256;
+  let totalTail = 0;
+  let bestStart = 0;
+  let bestEnd = 0;
   let bestCount = 0;
 
   for (let seed = 0; seed < n; seed++) {
-    if (data[seed] <= 0 || labels[seed] !== 0) continue;
-    label++;
-    let head = 0;
-    let tail = 0;
-    queue[tail++] = seed;
-    labels[seed] = label;
+    if (data[seed] <= 0 || visited[seed] !== 0) continue;
+    const start = totalTail;
+    let head = start;
+    queue[totalTail++] = seed;
+    visited[seed] = 1;
 
-    while (head < tail) {
+    while (head < totalTail) {
       const p = queue[head++];
-      const z = Math.floor(p / nxy);
-      const rem = p - z * nxy;
-      const y = Math.floor(rem / nx);
-      const x = rem - y * nx;
+      let x, y, z;
+      if (is256) {
+        z = p >>> 16;
+        y = (p >>> 8) & 255;
+        x = p & 255;
+      } else {
+        z = (p / nxy) | 0;
+        const rem = p - z * nxy;
+        y = (rem / nx) | 0;
+        x = rem - y * nx;
+      }
 
       const zMin = z > 0 ? -1 : 0;
       const zMax = z + 1 < nz ? 1 : 0;
@@ -1580,27 +1610,43 @@ export function largestBinaryComponent26(data, dim, binaryOutput = false) {
           for (let dx = xMin; dx <= xMax; dx++) {
             if (dx === 0 && dy === 0 && dz === 0) continue;
             const q = yzOff + (x + dx);
-            if (data[q] > 0 && labels[q] === 0) {
-              labels[q] = label;
-              queue[tail++] = q;
+            if (data[q] > 0 && visited[q] === 0) {
+              visited[q] = 1;
+              queue[totalTail++] = q;
             }
           }
         }
       }
     }
 
-    if (tail > bestCount) {
-      bestCount = tail;
-      bestLabel = label;
+    const compCount = totalTail - start;
+    if (compCount > bestCount) {
+      bestCount = compCount;
+      bestStart = start;
+      bestEnd = totalTail;
     }
   }
 
-  for (let i = 0; i < n; i++) {
-    if (labels[i] !== bestLabel || bestLabel === 0) {
-      data[i] = 0;
-    } else if (binaryOutput) {
-      data[i] = 1;
+  for (let k = 0; k < bestStart; k++) {
+    const idx = queue[k];
+    visited[idx] = 0;
+    data[idx] = 0;
+  }
+  if (binaryOutput) {
+    for (let k = bestStart; k < bestEnd; k++) {
+      const idx = queue[k];
+      visited[idx] = 0;
+      data[idx] = 1;
     }
+  } else {
+    for (let k = bestStart; k < bestEnd; k++) {
+      visited[queue[k]] = 0;
+    }
+  }
+  for (let k = bestEnd; k < totalTail; k++) {
+    const idx = queue[k];
+    visited[idx] = 0;
+    data[idx] = 0;
   }
   return data;
 }

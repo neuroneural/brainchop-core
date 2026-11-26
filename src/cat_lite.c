@@ -65,26 +65,85 @@ static void cl_blur_rows(void *context, int z_low, int z_high) {
 	const cl_blur_slab *slab = (const cl_blur_slab *)context;
 	const size_t nx = slab->dim[0], ny = slab->dim[1], nz = slab->dim[2];
 	const size_t plane = nx * ny;
-	for (int z = z_low; z <= z_high; z++)
-		for (size_t y = 0; y < ny; y++)
-			for (size_t x = 0; x < nx; x++) {
-				double weighted = 0.0, total = 0.0;
-				for (int offset = -slab->radius; offset <= slab->radius; offset++) {
-					double w = slab->weight[offset + slab->radius];
-					total += w;
-					int64_t sx = (int64_t)x, sy = (int64_t)y, sz = z;
-					if (slab->axis == 0) sx += offset;
-					else if (slab->axis == 1) sy += offset;
-					else sz += offset;
-					if (sx < 0 || sy < 0 || sz < 0 || sx >= (int64_t)nx ||
-							sy >= (int64_t)ny || sz >= (int64_t)nz)
-						continue;
-					weighted += w * slab->source[(size_t)sx + (size_t)sy * nx +
-						(size_t)sz * plane];
+	const int r = slab->radius;
+	const double *w = slab->weight;
+	double total = 0.0;
+	for (int d = -r; d <= r; d++) total += w[d + r];
+
+	if (slab->axis == 0) {
+		for (int z = z_low; z <= z_high; z++)
+		for (size_t y = 0; y < ny; y++) {
+			const float *src = slab->source + y * nx + (size_t)z * plane;
+			float *dst = slab->destination + y * nx + (size_t)z * plane;
+			size_t x_hi = nx > (size_t)r ? nx - (size_t)r : 0;
+			size_t x_lo = (size_t)r < nx ? (size_t)r : nx;
+			for (size_t x = 0; x < x_lo; x++) {
+				double weighted = 0.0;
+				for (int d = -r; d <= r; d++) {
+					int64_t sx = (int64_t)x + d;
+					if (sx >= 0 && sx < (int64_t)nx) weighted += w[d + r] * src[sx];
 				}
-				slab->destination[x + y * nx + (size_t)z * plane] =
-					(float)(weighted / total);
+				dst[x] = (float)(weighted / total);
 			}
+			for (size_t x = x_lo; x < x_hi; x++) {
+				double weighted = 0.0;
+				for (int d = -r; d <= r; d++) weighted += w[d + r] * src[x + (size_t)(int64_t)d];
+				dst[x] = (float)(weighted / total);
+			}
+			for (size_t x = x_hi > x_lo ? x_hi : x_lo; x < nx; x++) {
+				double weighted = 0.0;
+				for (int d = -r; d <= r; d++) {
+					int64_t sx = (int64_t)x + d;
+					if (sx >= 0 && sx < (int64_t)nx) weighted += w[d + r] * src[sx];
+				}
+				dst[x] = (float)(weighted / total);
+			}
+		}
+	} else if (slab->axis == 1) {
+		for (int z = z_low; z <= z_high; z++) {
+			const float *src_z = slab->source + (size_t)z * plane;
+			float *dst_z = slab->destination + (size_t)z * plane;
+			for (size_t y = 0; y < ny; y++) {
+				float *dst = dst_z + y * nx;
+				const float *ptrs[32];
+				double ws[32];
+				int nt = 0;
+				for (int d = -r; d <= r; d++) {
+					int64_t sy = (int64_t)y + d;
+					if (sy >= 0 && sy < (int64_t)ny) {
+						ptrs[nt] = src_z + (size_t)sy * nx;
+						ws[nt] = w[d + r];
+						nt++;
+					}
+				}
+				for (size_t x = 0; x < nx; x++) {
+					double weighted = 0.0;
+					for (int t = 0; t < nt; t++) weighted += ws[t] * ptrs[t][x];
+					dst[x] = (float)(weighted / total);
+				}
+			}
+		}
+	} else {
+		for (int z = z_low; z <= z_high; z++) {
+			float *dst_z = slab->destination + (size_t)z * plane;
+			const float *ptrs[32];
+			double ws[32];
+			int nt = 0;
+			for (int d = -r; d <= r; d++) {
+				int64_t sz = (int64_t)z + d;
+				if (sz >= 0 && sz < (int64_t)nz) {
+					ptrs[nt] = slab->source + (size_t)sz * plane;
+					ws[nt] = w[d + r];
+					nt++;
+				}
+			}
+			for (size_t p = 0; p < plane; p++) {
+				double weighted = 0.0;
+				for (int t = 0; t < nt; t++) weighted += ws[t] * ptrs[t][p];
+				dst_z[p] = (float)(weighted / total);
+			}
+		}
+	}
 }
 
 static int cl_blur(float *volume, float *scratch, const size_t dim[3]) {
@@ -454,6 +513,24 @@ static void cl_fit_rows(void *context, int k_low, int k_high) {
 	}
 }
 
+typedef struct {
+	float *gm, *wm, *csf;
+	const float *support;
+	size_t plane;
+} cl_gate_slab;
+
+static void cl_gate_rows(void *ctx, int z0, int z1) {
+	const cl_gate_slab *s = ctx;
+	size_t start = (size_t)z0 * s->plane;
+	size_t end = (size_t)(z1 + 1) * s->plane;
+	for (size_t i = start; i < end; i++) {
+		double g = cl_clamp(s->support[i], 0.0, 1.0);
+		s->gm[i] = (float)(s->gm[i] * g);
+		s->wm[i] = (float)(s->wm[i] * g);
+		s->csf[i] = (float)(s->csf[i] * g);
+	}
+}
+
 int bc_cat_lite_priors(float *planes, const size_t dim[3]) {
 	const size_t count = dim[0] * dim[1] * dim[2];
 	float *gm = planes + (size_t)BC_PVE_GM * count;
@@ -469,11 +546,9 @@ int bc_cat_lite_priors(float *planes, const size_t dim[3]) {
 		free(scratch);
 		return 1;
 	}
-	for (size_t i = 0; i < count; i++) {
-		double s = cl_clamp(support[i], 0.0, 1.0);
-		gm[i] = (float)(gm[i] * s); wm[i] = (float)(wm[i] * s);
-		csf[i] = (float)(csf[i] * s);
-	}
+	cl_gate_slab gs = { .gm = gm, .wm = wm, .csf = csf, .support = support,
+		.plane = dim[0] * dim[1] };
+	bc_parallel_for(0, (int)dim[2] - 1, 8, cl_gate_rows, &gs);
 	free(scratch);
 	return 0;
 }

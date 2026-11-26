@@ -170,19 +170,60 @@ static int64_t round_i64(double x) {
  * also catches them; an all-NaN volume otherwise ran to completion and wrote a
  * full-size image of +Inf with exit status 0.
  */
+#define BC_HOST_CHUNKS 32
+
+typedef struct {
+	float *value;
+	size_t nvox;
+	int nchunks;
+	size_t finite[BC_HOST_CHUNKS];
+	size_t replaced[BC_HOST_CHUNKS];
+	float vmin[BC_HOST_CHUNKS];
+	float vmax[BC_HOST_CHUNKS];
+} sanitize_ctx;
+
+static void sanitize_chunk(void *ctx, int c0, int c1) {
+	sanitize_ctx *c = ctx;
+	float *value = c->value;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->nvox / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->nvox / (size_t)c->nchunks;
+		size_t fin = 0, rep = 0;
+		float mn = INFINITY, mx = -INFINITY;
+		for (size_t i = i0; i < i1; i++) {
+			float v = value[i];
+			if (isfinite(v)) {
+				fin++;
+				if (v < mn) mn = v;
+				if (v > mx) mx = v;
+			} else {
+				value[i] = 0.0f;
+				rep++;
+			}
+		}
+		c->finite[ch] = fin;
+		c->replaced[ch] = rep;
+		c->vmin[ch] = mn;
+		c->vmax[ch] = mx;
+	}
+}
+
 static int sanitize_input(nifti_image *nim, int source_datatype) {
-	float *value = nim->data;
+	size_t nvox = (size_t)nim->nvox;
+	int nchunks = nvox >= 65536 ? BC_HOST_CHUNKS : 1;
+	sanitize_ctx sc;
+	memset(&sc, 0, sizeof(sc));
+	sc.value = nim->data; sc.nvox = nvox; sc.nchunks = nchunks;
+	bc_parallel_for(0, nchunks - 1, 1, sanitize_chunk, &sc);
 	size_t finite = 0, replaced = 0;
 	float vmin = INFINITY, vmax = -INFINITY;
-	for (size_t i = 0; i < (size_t)nim->nvox; i++) {
-		if (isfinite(value[i])) {
-			finite++;
-			if (value[i] < vmin) vmin = value[i];
-			if (value[i] > vmax) vmax = value[i];
-			continue;
+	for (int ch = 0; ch < nchunks; ch++) {
+		finite += sc.finite[ch];
+		replaced += sc.replaced[ch];
+		if (sc.finite[ch]) {
+			if (sc.vmin[ch] < vmin) vmin = sc.vmin[ch];
+			if (sc.vmax[ch] > vmax) vmax = sc.vmax[ch];
 		}
-		value[i] = 0.0f;
-		replaced++;
 	}
 	if (!finite) {
 		/* Report the datatype the file actually had: the caller has already
@@ -215,15 +256,47 @@ static void resolve_nifti_scaling(const nifti_image *nim, double *slope, double 
 	}
 }
 
-#define BC_DECODE_F32(T, src_ptr, dst_ptr, count, slope_val, inter_val) do { \
+#define BC_DECODE_F32_RANGE(T, src_ptr, dst_ptr, i0, i1, slope_val, inter_val) do { \
 	const T *in = (const T *)(src_ptr); \
 	if ((slope_val) == 1.0 && (inter_val) == 0.0) { \
-		for (size_t i = 0; i < (count); i++) (dst_ptr)[i] = (float)(double)in[i]; \
+		for (size_t i = (i0); i < (i1); i++) (dst_ptr)[i] = (float)(double)in[i]; \
 	} else { \
-		for (size_t i = 0; i < (count); i++) \
+		for (size_t i = (i0); i < (i1); i++) \
 			(dst_ptr)[i] = (float)((double)in[i] * (slope_val) + (inter_val)); \
 	} \
 } while (0)
+
+typedef struct {
+	const void *src;
+	float *dst;
+	size_t n;
+	int datatype;
+	double slope, inter;
+	int nchunks;
+} decode_f32_ctx;
+
+static void decode_f32_chunk(void *ctx, int c0, int c1) {
+	const decode_f32_ctx *c = ctx;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->n / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->n / (size_t)c->nchunks;
+		switch (c->datatype) {
+		case DT_UINT8:   BC_DECODE_F32_RANGE(uint8_t,  c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_INT8:    BC_DECODE_F32_RANGE(int8_t,   c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_UINT16:  BC_DECODE_F32_RANGE(uint16_t, c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_INT16:   BC_DECODE_F32_RANGE(int16_t,  c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_UINT32:  BC_DECODE_F32_RANGE(uint32_t, c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_INT32:   BC_DECODE_F32_RANGE(int32_t,  c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_UINT64:  BC_DECODE_F32_RANGE(uint64_t, c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_INT64:   BC_DECODE_F32_RANGE(int64_t,  c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_FLOAT32: BC_DECODE_F32_RANGE(float,    c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		case DT_FLOAT64: BC_DECODE_F32_RANGE(double,   c->src, c->dst, i0, i1, c->slope, c->inter); break;
+		default:
+			for (size_t i = i0; i < i1; i++) c->dst[i] = NAN;
+			break;
+		}
+	}
+}
 
 static void decode_to_float32(const nifti_image *src, float *dst) {
 	double slope, inter;
@@ -233,24 +306,34 @@ static void decode_to_float32(const nifti_image *src, float *dst) {
 		memcpy(dst, src->data, n * sizeof(*dst));
 		return;
 	}
-	switch (src->datatype) {
-	case DT_UINT8:   BC_DECODE_F32(uint8_t,  src->data, dst, n, slope, inter); break;
-	case DT_INT8:    BC_DECODE_F32(int8_t,   src->data, dst, n, slope, inter); break;
-	case DT_UINT16:  BC_DECODE_F32(uint16_t, src->data, dst, n, slope, inter); break;
-	case DT_INT16:   BC_DECODE_F32(int16_t,  src->data, dst, n, slope, inter); break;
-	case DT_UINT32:  BC_DECODE_F32(uint32_t, src->data, dst, n, slope, inter); break;
-	case DT_INT32:   BC_DECODE_F32(int32_t,  src->data, dst, n, slope, inter); break;
-	case DT_UINT64:  BC_DECODE_F32(uint64_t, src->data, dst, n, slope, inter); break;
-	case DT_INT64:   BC_DECODE_F32(int64_t,  src->data, dst, n, slope, inter); break;
-	case DT_FLOAT32: BC_DECODE_F32(float,    src->data, dst, n, slope, inter); break;
-	case DT_FLOAT64: BC_DECODE_F32(double,   src->data, dst, n, slope, inter); break;
-	default:
-		for (size_t i = 0; i < n; i++) dst[i] = NAN;
-		break;
-	}
+	int nchunks = n >= 65536 ? BC_HOST_CHUNKS : 1;
+	decode_f32_ctx ctx = { .src = src->data, .dst = dst, .n = n,
+		.datatype = src->datatype, .slope = slope, .inter = inter, .nchunks = nchunks };
+	bc_parallel_for(0, nchunks - 1, 1, decode_f32_chunk, &ctx);
 }
 
-#undef BC_DECODE_F32
+#undef BC_DECODE_F32_RANGE
+
+typedef struct {
+	const float *in;
+	uint8_t *out;
+	size_t n;
+	int nchunks;
+} f32_to_u8_ctx;
+
+static void f32_to_u8_chunk(void *ctx, int c0, int c1) {
+	const f32_to_u8_ctx *c = ctx;
+	const float *in = c->in;
+	uint8_t *out = c->out;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->n / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->n / (size_t)c->nchunks;
+		for (size_t i = i0; i < i1; i++) {
+			float v = in[i];
+			out[i] = !(v > 0.0f) ? 0u : v >= 255.0f ? 255u : (uint8_t)roundf(v);
+		}
+	}
+}
 
 int brainchopc_convert(nifti_image *nim, int datatype) {
 	if (!nim || !nim->data || nim->nvox < 1) return 1;
@@ -262,6 +345,20 @@ int brainchopc_convert(nifti_image *nim, int datatype) {
 	if (!out) return 1;
 	if (datatype == DT_FLOAT32) {
 		decode_to_float32(nim, (float *)out);
+	} else if (datatype == DT_UINT8 && nim->datatype == DT_FLOAT32) {
+		double slope, inter;
+		resolve_nifti_scaling(nim, &slope, &inter);
+		if (slope == 1.0 && inter == 0.0) {
+			size_t n = (size_t)nim->nvox;
+			int nchunks = n >= 65536 ? BC_HOST_CHUNKS : 1;
+			f32_to_u8_ctx ctx = { .in = (const float *)nim->data,
+				.out = (uint8_t *)out, .n = n, .nchunks = nchunks };
+			bc_parallel_for(0, nchunks - 1, 1, f32_to_u8_chunk, &ctx);
+		} else {
+			for (size_t i = 0; i < (size_t)nim->nvox; i++)
+				((uint8_t *)out)[i] = (uint8_t)clamp_round(
+					(double)((const float *)nim->data)[i] * slope + inter, 0, UINT8_MAX);
+		}
 	} else {
 		double slope, inter;
 		resolve_nifti_scaling(nim, &slope, &inter);
@@ -527,6 +624,27 @@ static int write_mask(const nifti_image *reference, const float *values,
  * deliberate 4x size cut, and 1/255 is finer than the fit's own agreement with
  * the reference.
  */
+typedef struct {
+	const float *src;
+	unsigned char *dst;
+	size_t n;
+	int chunks;
+} quant_frac_ctx;
+
+static void quant_frac_chunk(void *context, int lo, int hi) {
+	const quant_frac_ctx *q = (const quant_frac_ctx *)context;
+	size_t b0 = (q->n * (size_t)lo) / (size_t)q->chunks;
+	size_t b1 = (q->n * (size_t)(hi + 1)) / (size_t)q->chunks;
+	const float *src = q->src;
+	unsigned char *dst = q->dst;
+	for (size_t i = b0; i < b1; i++) {
+		float v = src[i];
+		if (!(v > 0.0f)) v = 0.0f;
+		if (v > 1.0f) v = 1.0f;
+		dst[i] = (unsigned char)(v * 255.0f + 0.5f);
+	}
+}
+
 static int write_fraction(const nifti_image *conformed, const nifti_image *original,
 		const float *values, const char *output, const char *tissue,
 		int save_conform, const char *backend_name, int no_turbo) {
@@ -565,12 +683,8 @@ static int write_fraction(const nifti_image *conformed, const nifti_image *origi
 	const float *resliced=(const float *)image->data;
 	unsigned char *quantised=nii_malloc((size_t)image->nvox,1);
 	if(!quantised){nifti_image_free(image);return 1;}
-	for(size_t i=0;i<(size_t)image->nvox;i++) {
-		float v=resliced[i];
-		if(!(v>0.0f))v=0.0f;
-		if(v>1.0f)v=1.0f;
-		quantised[i]=(unsigned char)(v*255.0f+0.5f);
-	}
+	quant_frac_ctx qctx = { resliced, quantised, (size_t)image->nvox, 32 };
+	bc_parallel_for(0, qctx.chunks - 1, 0, quant_frac_chunk, &qctx);
 	free(image->data);
 	image->data=quantised;
 	image->datatype=DT_UINT8;
@@ -620,7 +734,19 @@ static int run_model(nifti_image *original, int input_datatype,
 	*output=NULL;
 	int preserve_encoding=mindgrab_output && integer_input(original);
 	bc_stage(NULL);
-	nifti_image *conformed=private_float_copy(original);
+	nifti_image *conformed;
+	if (mindgrab_output) {
+		conformed=private_float_copy(original);
+	} else {
+		/* Label and --pve models never read original->data again (only its
+		   header/sform for native-space reslicing). Move the sanitized float
+		   buffer directly into conformed to skip a 67.1 MB allocation+copy. */
+		conformed=copy_header(original);
+		if (conformed) {
+			conformed->data=original->data;
+			original->data=NULL;
+		}
+	}
 	if (!conformed) return 1;
 	if(preserve_encoding && sanitize_input(conformed,input_datatype)) {
 		nifti_image_free(conformed);return 1;

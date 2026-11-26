@@ -812,7 +812,7 @@ int meshnet_cpu_infer(const unsigned char *conformed, float *labels,
 			return mt_infer(conformed, labels, plan, block2, block1, kernel);
 		}
 #ifndef __EMSCRIPTEN__ /* wasm has no turbo kernels */
-		printfx("%s: this CPU lacks i8mm/VNNI; turbo runs the exact engine\n", BC_MODEL_NAME);
+		printfx("%s: this CPU lacks i8mm/DotProd/AVX2; turbo runs the exact engine\n", BC_MODEL_NAME);
 #endif
 	}
 	mn_region region;

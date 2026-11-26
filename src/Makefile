@@ -579,8 +579,9 @@ check-payloads:
 COMMON_SOURCES = brainchopc.c cli.c preprocess.c backend.c backend_accel.c \
 	backend_cpu.c bc_threads.c cat_lite.c conform.c meshnet_cpu.c model_specs.c bwlabel.c \
 	nifti_io.c
+CPPFLAGS += -DBC_TURBO_CONE=$(TURBO_CONE)
 ifeq ($(METAL),1)
-CPPFLAGS += -DHAVE_METAL -DBC_TURBO_CONE=$(TURBO_CONE)
+CPPFLAGS += -DHAVE_METAL
 LDLIBS += -framework Foundation -framework Metal -lc++
 endif
 ifneq ($(filter 1 driver,$(CUDA)),)

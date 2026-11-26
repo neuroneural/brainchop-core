@@ -25,6 +25,7 @@ BC_WGL_PER_PLANE(BC_WGL_CLSFETCH)
 "  total+=v;st+=s;if(k==0)bg=s;\n"
 "  if((" BC_WGL_STR(BC_PRIOR_GM_MASK) " & (1u<<uint(k)))!=0u)tissue.x+=v;\n"
 "  if((" BC_WGL_STR(BC_PRIOR_WM_MASK) " & (1u<<uint(k)))!=0u)tissue.y+=v;\n"
+"  if((" BC_WGL_STR(BC_PRIOR_MIXED_GWM_MASK) " & (1u<<uint(k)))!=0u){float hv=0.5*v;tissue.x+=hv;tissue.y+=hv;}\n"
 "  if((" BC_WGL_STR(BC_PRIOR_CSF_MASK) " & (1u<<uint(k)))!=0u)tissue.z+=v;\n"
 " }\n"
 " outColor=vec4(tissue/total,clamp(1.0-bg/st,0.0,1.0));\n"

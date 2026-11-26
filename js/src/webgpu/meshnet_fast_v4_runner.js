@@ -693,7 +693,7 @@ function prepareHeadMaskFromNativeInput(raw, headRow, yzActive, normOffset, dete
 
 function getProbCacheKey(probCfg) {
   return probCfg
-    ? `${probCfg.grayMask}_${probCfg.whiteMask}_${probCfg.csfMask}_${probCfg.temperature}_${probCfg.supportTemperature}`
+    ? `${probCfg.grayMask}_${probCfg.whiteMask}_${probCfg.mixedGrayWhiteMask ?? 0}_${probCfg.csfMask}_${probCfg.temperature}_${probCfg.supportTemperature}`
     : 'seg';
 }
 
@@ -1621,6 +1621,7 @@ ${rep(4, (j) => `    let k${j} = k_base + ${j}u;
       let bit${j} = 1u << k${j};
       if ((${probCfg.grayMask}u & bit${j}) != 0u) { gm_num = gm_num + v${j}; }
       if ((${probCfg.whiteMask}u & bit${j}) != 0u) { wm_num = wm_num + v${j}; }
+      if ((${probCfg.mixedGrayWhiteMask ?? 0}u & bit${j}) != 0u) { let hv${j} = v${j} * 0.5; gm_num = gm_num + hv${j}; wm_num = wm_num + hv${j}; }
       if ((${probCfg.csfMask}u & bit${j}) != 0u) { csf_num = csf_num + v${j}; }
     }\n`)}  }
 

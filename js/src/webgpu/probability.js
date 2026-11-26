@@ -1,8 +1,9 @@
 // Shared host-side pieces for the native WebGL2 tissue-probability path.
 
 const DEFAULT_GROUPS = {
-  grayMatter: [2, 6, 7, 8, 9, 10, 14, 15, 16, 17],
-  whiteMatter: [1, 5],
+  grayMatter: [2, 6, 8, 9, 14, 15, 16],
+  whiteMatter: [1, 5, 13],
+  mixedGrayWhite: [7, 10, 17],
   csf: [3, 4, 11, 12],
 };
 
@@ -37,6 +38,7 @@ export function tissueProbabilityConfig(options, nclass) {
     sigma: finiteOption(options, 'partialVolumeSigma', 0, 0, 2),
     grayMask: maskFor(groups.grayMatter, nclass, 'gray-matter'),
     whiteMask: maskFor(groups.whiteMatter, nclass, 'white-matter'),
+    mixedGrayWhiteMask: maskFor(groups.mixedGrayWhite, nclass, 'mixed-gray-white'),
     csfMask: maskFor(groups.csf, nclass, 'CSF'),
   };
 }

@@ -59,9 +59,9 @@ const bc_accel_model_spec *bc_accel_spec(void) {
 }
 
 #if BC_MODEL_QUANTILE_MODE == 0
-static double accel_quantile(const int64_t *cumulative, double quantile, int upper) {
+static double accel_quantile(const int64_t *cumulative, size_t count, double quantile, int upper) {
 	(void)upper;
-	double rank = quantile * (double)(ACCEL_NVOX - 1);
+	double rank = quantile * (double)(count - 1);
 	double base = floor(rank);
 	double fraction = rank - base;
 	size_t index = (size_t)base;
@@ -78,10 +78,10 @@ static double accel_quantile(const int64_t *cumulative, double quantile, int upp
    it from the value: the upper rank uses ceil()-1 and the lower a plain
    truncation, and guessing from `q > 0.5` would silently pick the wrong form
    for a model whose quantile pair sits entirely above or below the midpoint. */
-static double accel_quantile(const int64_t *cumulative, double quantile, int upper) {
-	size_t rank = upper
-		? (size_t)ceil((double)ACCEL_NVOX * quantile) - 1
-		: (size_t)((double)ACCEL_NVOX * quantile);
+static double accel_quantile(const int64_t *cumulative, size_t count, double quantile, int upper) {
+	double raw = upper ? ceil((double)count * quantile) : (double)count * quantile;
+	size_t rank = upper ? (raw > 0.0 ? (size_t)raw - 1 : 0) : (size_t)raw;
+	if (rank >= count) rank = count - 1;
 	int bin = 0;
 	while (bin < 255 && cumulative[bin] <= (int64_t)rank) bin++;
 	return (double)bin;
@@ -156,8 +156,17 @@ float *bc_accel_normalize_input(const unsigned char *source) {
 		run += histogram[i];
 		cumulative[i] = run;
 	}
-	float low = (float)accel_quantile(cumulative, BC_MODEL_NORM_Q_LOW, 0);
-	float high = (float)accel_quantile(cumulative, BC_MODEL_NORM_Q_HIGH, 1);
+	float low = (float)accel_quantile(cumulative, ACCEL_NVOX, BC_MODEL_NORM_Q_LOW, 0);
+	float high = (float)accel_quantile(cumulative, ACCEL_NVOX, BC_MODEL_NORM_Q_HIGH, 1);
+	if (high <= low && histogram[0] < (int64_t)ACCEL_NVOX) {
+		int64_t fg_cum[256];
+		fg_cum[0] = 0;
+		for (int i = 1; i < 256; i++) fg_cum[i] = cumulative[i] - histogram[0];
+		size_t fg_n = ACCEL_NVOX - (size_t)histogram[0];
+		low = (float)accel_quantile(fg_cum, fg_n, BC_MODEL_NORM_Q_LOW, 0);
+		high = (float)accel_quantile(fg_cum, fg_n, BC_MODEL_NORM_Q_HIGH, 1);
+		if (high <= low && high > 0.0f) low = 0.0f;
+	}
 	float denominator = high - low + BC_MODEL_NORM_DENOM_EPS;
 	if (!(denominator > 0.0f)) denominator = 1.0f;
 	float *normalized = (float *)malloc(ACCEL_NVOX * sizeof(*normalized));

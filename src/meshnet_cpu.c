@@ -123,8 +123,9 @@ static double mn_quantile(const int64_t *cum, size_t count, double q, int upper)
    truncation, and guessing from `q > 0.5` would silently pick the wrong form
    for a model whose quantile pair sits entirely above or below the midpoint. */
 static double mn_quantile(const int64_t *cum, size_t count, double q, int upper) {
-	size_t rank = upper ? (size_t)ceil((double)count * q) - 1
-	                    : (size_t)((double)count * q);
+	double raw = upper ? ceil((double)count * q) : (double)count * q;
+	size_t rank = upper ? (raw > 0.0 ? (size_t)raw - 1 : 0) : (size_t)raw;
+	if (rank >= count) rank = count - 1;
 	int bin = 0;
 	while (bin < 255 && cum[bin] <= (int64_t)rank) bin++;
 	return (double)bin;
@@ -171,6 +172,15 @@ static void mn_normalize(const unsigned char *source, float *destination,
 	mn_histogram(source, cum, region);
 	float low = (float)mn_quantile(cum, region->count, BC_MODEL_NORM_Q_LOW, 0);
 	float high = (float)mn_quantile(cum, region->count, BC_MODEL_NORM_Q_HIGH, 1);
+	if (high <= low && cum[0] < (int64_t)region->count) {
+		int64_t fg_cum[256];
+		fg_cum[0] = 0;
+		for (int i = 1; i < 256; i++) fg_cum[i] = cum[i] - cum[0];
+		size_t fg_n = region->count - (size_t)cum[0];
+		low = (float)mn_quantile(fg_cum, fg_n, BC_MODEL_NORM_Q_LOW, 0);
+		high = (float)mn_quantile(fg_cum, fg_n, BC_MODEL_NORM_Q_HIGH, 1);
+		if (high <= low && high > 0.0f) low = 0.0f;
+	}
 	float denominator = high - low + BC_MODEL_NORM_DENOM_EPS;
 	if (!(denominator > 0.0f)) denominator = 1.0f;
 	mn_normalize_slab slab = { .source = source, .destination = destination,
@@ -708,6 +718,11 @@ static void mn_pve_rows(void *context, int z_low, int z_high) {
 			if (c == 0) background = support;
 			for (int t = 0; t < 3; t++)
 				if (masks[t] & (1u << c)) numerator[t] += weight;
+			if (BC_PRIOR_MIXED_GWM_MASK & (1u << c)) {
+				float half = 0.5f * weight;
+				numerator[0] += half;
+				numerator[1] += half;
+			}
 		}
 		for (int t = 0; t < 3; t++)
 			slab->planes[(size_t)t * MN_NVOX + i] = numerator[t] / denominator;

@@ -29,30 +29,38 @@ export function computeQuantiles(data, lowerQuantile = 0.05, upperQuantile = 0.9
 
   // Fast exact 256-bin histogram over all voxels for Uint8 volumes (~4-6 ms for 256³).
   if (data instanceof Uint8Array || data instanceof Uint8ClampedArray) {
-    const lowIndex = Math.max(0, Math.min(totalSize - 1, Math.floor(totalSize * lowerQuantile)));
-    const highIndex = Math.max(0, Math.min(totalSize - 1, Math.ceil(totalSize * upperQuantile) - 1));
     const hist = new Uint32Array(256);
     for (let i = 0; i < totalSize; i++) {
       hist[data[i]]++;
     }
-    let cum = 0;
-    let qmin = 0;
-    let qmax = 0;
-    let foundLow = false;
-    let foundHigh = false;
-    for (let b = 0; b < 256; b++) {
-      const c = hist[b];
-      if (c === 0) continue;
-      cum += c;
-      if (!foundLow && cum > lowIndex) {
-        qmin = b;
-        foundLow = true;
+    const rankQuantiles = (startBin, count) => {
+      const lowIndex = Math.max(0, Math.min(count - 1, Math.floor(count * lowerQuantile)));
+      const highIndex = Math.max(0, Math.min(count - 1, Math.ceil(count * upperQuantile) - 1));
+      let cum = 0;
+      let qmin = 0;
+      let qmax = 0;
+      let foundLow = false;
+      let foundHigh = false;
+      for (let b = startBin; b < 256; b++) {
+        const c = hist[b];
+        if (c === 0) continue;
+        cum += c;
+        if (!foundLow && cum > lowIndex) {
+          qmin = b;
+          foundLow = true;
+        }
+        if (!foundHigh && cum > highIndex) {
+          qmax = b;
+          foundHigh = true;
+        }
+        if (foundLow && foundHigh) break;
       }
-      if (!foundHigh && cum > highIndex) {
-        qmax = b;
-        foundHigh = true;
-      }
-      if (foundLow && foundHigh) break;
+      return { qmin, qmax };
+    };
+    let { qmin, qmax } = rankQuantiles(0, totalSize);
+    if (qmax <= qmin && hist[0] < totalSize) {
+      ({ qmin, qmax } = rankQuantiles(1, totalSize - hist[0]));
+      if (qmax <= qmin && qmax > 0) qmin = 0;
     }
     return { qmin, qmax };
   }
@@ -104,17 +112,28 @@ export function computeLinearQuantiles(data, lowerQuantile = 0.02, upperQuantile
     run += hist[b];
     cum[b] = run;
   }
-  const at = (q) => {
-    const rank = q * (n - 1);
+  const at = (cumArr, count, q) => {
+    const rank = q * (count - 1);
     const base = Math.floor(rank);
     const t = rank - base;
     let a = 0;
-    while (a < 255 && cum[a] <= base) a++;
+    while (a < 255 && cumArr[a] <= base) a++;
     let b = a;
-    while (b < 255 && cum[b] <= base + 1) b++;
+    while (b < 255 && cumArr[b] <= base + 1) b++;
     return t < 0.5 ? a + (b - a) * t : b - (b - a) * (1 - t);
   };
-  return { qmin: at(lowerQuantile), qmax: at(upperQuantile) };
+  let qmin = at(cum, n, lowerQuantile);
+  let qmax = at(cum, n, upperQuantile);
+  if (qmax <= qmin && hist[0] < n) {
+    const fgCum = new Float64Array(256);
+    const bg = hist[0];
+    for (let b = 1; b < 256; b++) fgCum[b] = cum[b] - bg;
+    const fgN = n - bg;
+    qmin = at(fgCum, fgN, lowerQuantile);
+    qmax = at(fgCum, fgN, upperQuantile);
+    if (qmax <= qmin && qmax > 0) qmin = 0;
+  }
+  return { qmin, qmax };
 }
 
 /**

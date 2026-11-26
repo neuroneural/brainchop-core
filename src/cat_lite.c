@@ -37,6 +37,7 @@
 #define CL_MIXEL_PRIOR 0.35
 #define CL_CSF_WM_MIXEL_PRIOR 6.0
 #define CL_SPATIAL_WEIGHT 0.25
+#define CL_STAT_PURITY 0.55
 #define CL_PARTIAL_VOLUME_SIGMA BC_PVE_BLUR_SIGMA
 
 static double cl_clamp(double v, double low, double high) {
@@ -139,9 +140,13 @@ static void cl_weights(const cl_fit_data *fit, size_t i, double w[3]) {
 	double v = fit->wm[i] > 0 ? fit->wm[i] : 0;
 	double c = fit->csf[i] > 0 ? fit->csf[i] : 0;
 	double raw = g + v + c, support = raw < 1.0 ? raw : 1.0;
-	w[0] = support * pow(c / raw, CL_PRIOR_POWER);
-	w[1] = support * pow(g / raw, CL_PRIOR_POWER);
-	w[2] = support * pow(v / raw, CL_PRIOR_POWER);
+	double pc = c / raw, pg = g / raw, pv = v / raw;
+	/* Exclude 50/50 mixed priors (myelinated subcorticals {7,10,17} and PVE
+	   borders) from global tissue mean/sigma estimation so they cannot skew
+	   cortical GM / WM statistics. */
+	w[0] = pc > CL_STAT_PURITY ? support * pow(pc, CL_PRIOR_POWER) : 0.0;
+	w[1] = pg > CL_STAT_PURITY ? support * pow(pg, CL_PRIOR_POWER) : 0.0;
+	w[2] = pv > CL_STAT_PURITY ? support * pow(pv, CL_PRIOR_POWER) : 0.0;
 }
 
 /* Positive comparisons preserve the reference's NaN-to-zero behavior here.

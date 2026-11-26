@@ -9,15 +9,16 @@
  * usage: node cat_lite_js_check.mjs DUMP OUT [BRAINCHOP_TEST_DIR [C_OUTPUT]]
  */
 import { readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const [dumpPath, outPath, treeArgument, comparePath] = process.argv.slice(2)
 if (!dumpPath || !outPath) {
-  console.error('usage: node cat_lite_js_check.mjs DUMP OUT [BRAINCHOP_TEST_DIR [C_OUTPUT]]')
+  console.error('usage: node cat_lite_js_check.mjs DUMP OUT [CAT_LITE_DIR [C_OUTPUT]]')
   process.exit(2)
 }
-const tree = resolve(treeArgument ?? process.env.BC_BRAINCHOP_TEST ?? '../brainchop-test')
+const defaultDir = resolve(dirname(fileURLToPath(import.meta.url)), '../js/src/webgpu')
+const tree = resolve(treeArgument ?? process.env.BC_CAT_LITE_JS_DIR ?? defaultDir)
 const { applyCatLitePartialVolume } = await import(pathToFileURL(resolve(tree, 'cat-lite.js')))
 
 const DIM = 256

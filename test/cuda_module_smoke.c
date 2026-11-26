@@ -245,6 +245,11 @@ int main(int argc, char **argv) {
                 double probability = exp(logit / 2);
                 denom += probability; support += exp(logit);
                 for (int t = 0; t < 3; t++) if (masks[t] & (1u << c)) num[t] += probability;
+                if (BC_PRIOR_MIXED_GWM_MASK & (1u << c)) {
+                    double half = 0.5 * probability;
+                    num[0] += half;
+                    num[1] += half;
+                }
             }
             for (int t = 0; t < 4; t++) {
                 double want = t < 3 ? num[t] / denom : 1 - 1 / support;

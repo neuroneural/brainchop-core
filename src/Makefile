@@ -1709,6 +1709,11 @@ test-guards: models | $(BC_TMP)
 	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-4d-out.nii.gz $(BC_TMP)/bc-4d-test.nii
 	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-4d-out.nii.gz $(BC_TMP)/bc-4d-test.nii 2>&1 | grep -q "4D (8x8x8x2)"
 	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mgz-out.nii.gz $(BC_TMP)/nonexistent.mgz
+	for m in MINDGRAB:mindgrab MINDMAP:mindmap; do set -- $$(echo $$m | tr : ' '); \
+		$(CC) $(CPPFLAGS) $(CFLAGS) -DBC_MODEL_IS_$$1=1 -Imodels/$$2 -I. \
+			../test/norm_small_brain_check.c backend_accel.c bc_threads.c model_specs.c cat_lite.c \
+			$(LDFLAGS) -lm -o $(BC_TMP)/norm-small-brain-check-$$2$(EXEEXT) && \
+		$(BC_TMP)/norm-small-brain-check-$$2$(EXEEXT) || exit 1; done
 	./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mgz-out.nii.gz $(BC_TMP)/nonexistent.mgz 2>&1 | grep -q "unsupported format"
 	python3 -c 'import struct; h=bytearray(352); struct.pack_into("<i",h,0,348); struct.pack_into("<8h",h,40,3,8,8,8,1,1,1,1); struct.pack_into("<h",h,70,16); struct.pack_into("<h",h,72,32); struct.pack_into("<8f",h,76,0,0,0,0,0,0,0,0); struct.pack_into("<f",h,108,352.0); struct.pack_into("<hh",h,252,0,1); struct.pack_into("<12f",h,280,1,0,0,0, 1,0,0,0, 0,0,0,0); h[344:348]=b"n+1\0"; open("$(BC_TMP)/bc-singular-test.nii","wb").write(bytes(h)+b"".join(struct.pack("<f",float(i)) for i in range(512)))'
 	! ./$(exe_mindgrab) -cpu 0 --no-turbo -o $(BC_TMP)/bc-singular-out.nii.gz $(BC_TMP)/bc-singular-test.nii
@@ -2192,14 +2197,12 @@ clean:
 # are upstream of the comparison and cannot hide a porting error inside a
 # tolerance. Needs node and ../brainchop-test; skipped, loudly, without them.
 BC_BRAINCHOP_TEST ?= ../../brainchop-test
+BC_CAT_LITE_JS_DIR ?= ../js/src/webgpu
 .PHONY: test-cat-lite
 test-cat-lite: models | $(BC_TMP)
 ifneq ($(filter mindmap,$(MODELS)),)
-	@if [ ! -f "$(BC_BRAINCHOP_TEST)/cat-lite.js" ]; then \
-		echo "test-cat-lite: SKIPPED -- no $(BC_BRAINCHOP_TEST)/cat-lite.js." >&2; \
-		echo "  The reference tree is a sibling checkout, not a dependency of this" >&2; \
-		echo "  repo. Set BC_BRAINCHOP_TEST to run the gate. Failing here would" >&2; \
-		echo "  break 'make test' -- the whole safety net -- for a missing sibling." >&2; \
+	@if [ ! -f "$(BC_CAT_LITE_JS_DIR)/cat-lite.js" ] || ! command -v node >/dev/null 2>&1; then \
+		echo "test-cat-lite: SKIPPED -- requires node and $(BC_CAT_LITE_JS_DIR)/cat-lite.js." >&2; \
 	else $(MAKE) test-cat-lite-run; fi
 
 .PHONY: test-cat-lite-run
@@ -2212,7 +2215,7 @@ test-cat-lite-run: | $(BC_TMP)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -I. -Imodels/mindmap -D$(sel_mindmap)=1 \
 		../test/cat_lite_cache_check.c bc_threads.c $(LDFLAGS) -lm -o $(BC_TMP)/cat-cache-check$(EXEEXT)
 	$(BC_TMP)/cat-cache-check$(EXEEXT)
-	node ../test/cat_lite_cases.mjs $(BC_TMP)/cat-lite-check$(EXEEXT) $(BC_BRAINCHOP_TEST)
+	node ../test/cat_lite_cases.mjs $(BC_TMP)/cat-lite-check$(EXEEXT) $(BC_CAT_LITE_JS_DIR)
 	$(BC_TMP)/cat-lite-check$(EXEEXT) $(BC_TMP)/bc-pve-dump.bin $(BC_TMP)/bc-pve-c.bin
 	# The fit parallelises supported voxels and folds its reductions serially, the same
 	# shape MN_DEFINE_MOMENTS uses. Assert that, rather than assuming it.
@@ -2223,10 +2226,10 @@ test-cat-lite-run: | $(BC_TMP)
 	done
 	@echo "test-cat-lite: --pve is thread-count independent"
 	node --max-old-space-size=8192 ../test/cat_lite_js_check.mjs \
-		$(BC_TMP)/bc-pve-dump.bin $(BC_TMP)/bc-pve-js.bin $(BC_BRAINCHOP_TEST) \
+		$(BC_TMP)/bc-pve-dump.bin $(BC_TMP)/bc-pve-js.bin $(BC_CAT_LITE_JS_DIR) \
 		$(BC_TMP)/bc-pve-c.bin
 	node ../test/cat_lite_volume_cases.mjs $(BC_TMP)/cat-lite-check$(EXEEXT) \
-		$(BC_BRAINCHOP_TEST) $(BC_TMP)/bc-pve-dump.bin $(BC_TMP)/cat-lite-volume-cases.json
+		$(BC_CAT_LITE_JS_DIR) $(BC_TMP)/bc-pve-dump.bin $(BC_TMP)/cat-lite-volume-cases.json
 else
 	@echo "test-cat-lite: this build has no model with a PVE mode"
 endif

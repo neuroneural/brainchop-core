@@ -669,6 +669,11 @@ BC_CUDA_GLOBAL __global__ void tissue_priors_kernel(const bc_act *__restrict__ s
 		if (c == 0) background = support;
 		for (int t = 0; t < 3; t++)
 			if (masks[t] & (1u << c)) numerator[t] += weight;
+		if (BC_PRIOR_MIXED_GWM_MASK & (1u << c)) {
+			float half = 0.5f * weight;
+			numerator[0] += half;
+			numerator[1] += half;
+		}
 	}
 	for (int t = 0; t < 3; t++) planes[(size_t)t * CUDA_NVOX + voxel] = numerator[t] / denominator;
 	planes[3 * CUDA_NVOX + voxel] = fminf(1.0f, fmaxf(0.0f, 1.0f - background / support_denominator));

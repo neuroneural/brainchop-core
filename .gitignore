@@ -56,6 +56,7 @@ plan_*.md
 !/test/nii_dice.py
 !/test/mindgrab_scaling.py
 !/test/mindgrab_encoding_check.c
+!/test/norm_small_brain_check.c
 !/test/cpu_turbo_check.c
 !/test/cpu_sme_check.c
 !/test/cuda_module_smoke.c

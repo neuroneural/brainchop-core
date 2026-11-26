@@ -362,8 +362,8 @@ async function segmentInternal(
   const { args, maskPath } = buildArgs(options)
   if (tissueMode) {
     const canonical = canonicalModelName(options.model)
-    if ((canonical !== 'mindmap' && canonical !== 'mindmap-fast') || options.mask || options.borderMm || options.legacyCleanup)
-      reject(options.model, 'tissue fractions', 'requires an 18-class model without mask or categorical cleanup options')
+    if (canonical !== 'mindmap' || options.mask || options.borderMm || options.legacyCleanup)
+      reject(options.model, 'tissue fractions', 'partial-volume tissue fractions are supported only for mindmap without mask or categorical cleanup options')
     args.push('--pve')
   }
 

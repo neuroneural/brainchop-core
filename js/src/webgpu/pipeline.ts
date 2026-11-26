@@ -83,8 +83,9 @@ const PVE_MODEL_OPTIONS = {
   brainSupportPower: 1.0,
   partialVolumeSigma: 0.65,
   probabilityGroups: {
-    grayMatter: [2, 6, 7, 8, 9, 10, 14, 15, 16, 17],
-    whiteMatter: [1, 5],
+    grayMatter: [2, 6, 8, 9, 14, 15, 16],
+    whiteMatter: [1, 5, 13],
+    mixedGrayWhite: [7, 10, 17],
     csf: [3, 4, 11, 12],
   },
 }

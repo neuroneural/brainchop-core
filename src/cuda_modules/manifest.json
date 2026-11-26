@@ -1,5 +1,5 @@
 {
-  "abi_version": 2,
+  "abi_version": 3,
   "architectures": [
     60,
     70,
@@ -76,12 +76,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi1ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi1ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 1
     },
@@ -91,12 +95,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi1ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi1ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 1
     },
@@ -106,12 +114,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi1ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi1ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 1
     },
@@ -121,12 +133,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi2ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi2ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 2
     },
@@ -136,12 +152,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi2ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi2ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 2
     },
@@ -151,12 +171,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi2ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi2ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 2
     },
@@ -166,12 +190,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi3ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi3ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 3
     },
@@ -181,12 +209,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi3ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi3ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 3
     },
@@ -196,12 +228,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi3ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi3ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 3
     },
@@ -211,12 +247,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi4ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi4ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 4
     },
@@ -226,12 +266,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi4ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi4ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 4
     },
@@ -241,12 +285,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi4ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi4ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 4
     },
@@ -256,12 +304,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi6ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi6ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 6
     },
@@ -271,12 +323,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi6ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi6ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 6
     },
@@ -286,12 +342,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi6ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi6ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 6
     },
@@ -301,12 +361,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi8ELi128EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi8ELi128EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 128,
       "vpt": 8
     },
@@ -316,12 +380,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi8ELi256EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi8ELi256EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 256,
       "vpt": 8
     },
@@ -331,12 +399,16 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int",
         "int",
         "int"
       ],
-      "symbol": "_Z13conv3d_kernelILi8ELi512EEvPK6__halfPS0_S2_iiii",
+      "symbol": "_Z13conv3d_kernelILi8ELi512EEvPK6__halfPS0_S2_PdPKjPKfiiiii",
       "threads": 512,
       "vpt": 8
     },
@@ -346,9 +418,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi2EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi2EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 2
     },
     {
@@ -357,9 +433,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi4EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi4EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 4
     },
     {
@@ -368,9 +448,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi8EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi8EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 8
     },
     {
@@ -379,9 +463,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi16EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi16EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 16
     },
     {
@@ -390,9 +478,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi24EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi24EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 24
     },
     {
@@ -401,9 +493,13 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int"
       ],
-      "symbol": "_Z18conv3d_wmma_kernelILi32EEvPK6__halfPS0_S2_i",
+      "symbol": "_Z18conv3d_wmma_kernelILi32EEvPK6__halfPS0_S2_PdPKjPKfii",
       "warps": 32
     },
     {
@@ -414,17 +510,10 @@
       "symbol": "wmma_probe_kernel"
     },
     {
-      "id": "reduce_channels_kernel",
-      "parameters": [
-        "pointer",
-        "pointer",
-        "int"
-      ],
-      "symbol": "reduce_channels_kernel"
-    },
-    {
       "id": "moments_finish_kernel",
       "parameters": [
+        "pointer",
+        "pointer",
         "pointer",
         "pointer",
         "pointer",
@@ -439,22 +528,45 @@
         "pointer",
         "pointer",
         "pointer",
-        "pointer",
         "int"
       ],
       "symbol": "norm_gelu_kernel"
     },
     {
-      "id": "classify_kernel",
+      "id": "fill_rows_kernel",
       "parameters": [
-        "pointer",
-        "pointer",
         "pointer",
         "pointer",
         "int",
         "int"
       ],
-      "symbol": "classify_kernel"
+      "symbol": "fill_rows_kernel"
+    },
+    {
+      "id": "classify_u8_kernel",
+      "parameters": [
+        "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
+        "int",
+        "int"
+      ],
+      "symbol": "classify_u8_kernel"
+    },
+    {
+      "id": "fill_labels_u8_kernel",
+      "parameters": [
+        "pointer",
+        "pointer",
+        "int",
+        "int"
+      ],
+      "symbol": "fill_labels_u8_kernel"
     },
     {
       "id": "tissue_priors_kernel",
@@ -463,10 +575,41 @@
         "pointer",
         "pointer",
         "pointer",
+        "pointer",
+        "pointer",
+        "pointer",
+        "int",
         "int",
         "int"
       ],
       "symbol": "tissue_priors_kernel"
+    },
+    {
+      "id": "fill_priors_kernel",
+      "parameters": [
+        "pointer",
+        "pointer",
+        "int",
+        "int"
+      ],
+      "symbol": "fill_priors_kernel"
+    },
+    {
+      "id": "pve_blur_kernel",
+      "parameters": [
+        "pointer",
+        "pointer",
+        "int"
+      ],
+      "symbol": "pve_blur_kernel"
+    },
+    {
+      "id": "pve_support_kernel",
+      "parameters": [
+        "pointer",
+        "pointer"
+      ],
+      "symbol": "pve_support_kernel"
     },
     {
       "id": "checksum_kernel",
@@ -490,23 +633,23 @@
   "models": {
     "mindgrab": {
       "file": "mindgrab.fatbin",
-      "sha256": "d413f064ae1079c195b2cf2bec1daa280398e282c4b1320f9d41a4bb911ec2e5",
-      "size": 2381736
+      "sha256": "bebf8eb1895629f8e06307994c4224f52a408caa6e8bf7e6530740302c96b049",
+      "size": 6340680
     },
     "mindmap": {
       "file": "mindmap.fatbin",
-      "sha256": "2bdf3a31e957d7cf221e71a7da42ef6eb9b982db3e0224a0389af14c341d7f70",
-      "size": 4793104
+      "sha256": "b74a0912438319986d6f6b181346aa72e5370e3a4420bfd4f23322a85d480579",
+      "size": 9586144
     },
     "mindsnap": {
       "file": "mindsnap.fatbin",
-      "sha256": "09b9e52a9ebf66e8fc67202457754d6052a113e488beaafe5798b55ec448378f",
-      "size": 3357624
+      "sha256": "49c481f623c72cc474360cd867e9067aa8e81bfcb1c072cf025c2871464bff13",
+      "size": 9192024
     },
     "model16chan18cls": {
       "file": "model16chan18cls.fatbin",
-      "sha256": "0811f08d4ff929a8eed8a901a6a4949e783cc55f5cea10998e3c8717eaf72d90",
-      "size": 3708776
+      "sha256": "f311a4904b33a56db3ce70d7144f2922dcc13ec04fb328f88fb0142c5a291480",
+      "size": 6592832
     }
   },
   "nvcc_version": "12.8.93",
@@ -514,11 +657,11 @@
   "ptx_version": "8.7",
   "schema_version": 2,
   "sources": {
-    "scripts/build_cuda_modules.py": "388d83580c9f3935d6c0c628272d57cadf78613fcd4b92f8909256af1ddea325",
+    "scripts/build_cuda_modules.py": "d8a368a3d1decb5bb0ce4d355b8107db8aa9369b8d2d36ad5c99bfd344014f83",
     "src/cuda_geometry.h": "c7a317ccf4f9e3e8dc572d493423e7a38b522d9e55105152ab2fa21dbb910bcc",
     "src/cuda_geometry_mindmap.h": "29655b4e0a7c485b2c37d7b9d7102515fbd103ae81040a1da912c142d2d36d67",
-    "src/cuda_kernels.cuh": "e15f0ad9768362a3dd96e04441de4ea8dc00dacf3d1d3c6708e636b98c78c785",
-    "src/cuda_module.cu": "c68758bdc38d62724ebedb767d3916932d920b70572465f69a116d09e4dde85b",
+    "src/cuda_kernels.cuh": "99784a31fc39e8bae0ee8feeb0f21f06dd18490211f767bbcb19c73bdc842849",
+    "src/cuda_module.cu": "902f762a2aa311c38c79939cdbfae7cc4cccc7671807ab5ad5bc505b1aa20f68",
     "src/cuda_variants.h": "f03411c527b7c515475ede78f96c0b6cf03dd57537a11477030304ab27a94c26",
     "src/model_specs.h": "dc81cafa71cad49378e853030d6ce9294531c74d999ccf2ebc7647de0a059190",
     "src/models/mindgrab/model.json": "24d1bcccba736a83c80b336ca349297f4839ae08b8ec92ec72c5d6adb9afe76e",
@@ -533,6 +676,6 @@
     "src/models/model16chan18cls/model.json": "758fdd73d1d10d01342c0633e7d146a5f0ee31eb7ffee196ca9271e72dea1ffb",
     "src/models/model16chan18cls/model_def.h": "808d3ff658c37f560a2a79345f9098afc446be55750ffea4628b73014c324edb",
     "src/models/model16chan18cls/model_meta.json": "1b6a8ea0db3c33456038284886ee170372d92e0af048178920bdd929167a762e",
-    "src/pve_constants.h": "2bcbd8fceab885aba4b04cf0f61a4c878d6c5cab45422157af94e4e090d5ac4c"
+    "src/pve_constants.h": "bc4683ff874344dad76cebe82829f9c6526aa6701575e34deadbe2695faddd92"
   }
 }

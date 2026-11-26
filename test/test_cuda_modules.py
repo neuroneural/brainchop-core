@@ -105,7 +105,7 @@ class IntegrityTests(unittest.TestCase):
 class ExportTests(unittest.TestCase):
     def setUp(self):
         self.kernels = m.kernels()
-        self.ptx = '.version 8.7\n.target sm_90\n' + '\n'.join(
+        self.ptx = f'.version {m.PTX_VERSION}\n.target sm_90\n' + '\n'.join(
             '.visible .entry ' + k['symbol'] + '(' + ','.join(
                 f'.param .{"u32" if t == "int" else "u64"} a{i}'
                 for i, t in enumerate(k['parameters'])) + ')' for k in self.kernels)

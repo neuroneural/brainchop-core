@@ -16,7 +16,8 @@ ARCHES = (60, 70, 75, 80, 86, 89, 90)
 PTX_ARCH = 90
 NVCC_VERSION = '12.8.93'
 DRIVER_API = 12080
-ABI = 2
+PTX_VERSION = '8.7'
+ABI = 3
 FLAGS = ('-O3', '--use_fast_math', '-std=c++11', '--machine=64')
 SOURCES = ('src/cuda_kernels.cuh', 'src/cuda_module.cu', 'src/cuda_variants.h',
            'src/model_specs.h', 'src/cuda_geometry.h', 'src/cuda_geometry_mindmap.h',
@@ -25,11 +26,15 @@ SOURCES = ('src/cuda_kernels.cuh', 'src/cuda_module.cu', 'src/cuda_variants.h',
 # size = 64-bit size_t; int = signed 32-bit. Launch policy remains in the runner.
 AUX = {
     'wmma_probe_kernel': ['pointer'],
-    'reduce_channels_kernel': ['pointer', 'pointer', 'int'],
-    'moments_finish_kernel': ['pointer', 'pointer', 'pointer', 'int'],
-    'norm_gelu_kernel': ['pointer', 'pointer', 'pointer', 'pointer', 'pointer', 'int'],
-    'classify_kernel': ['pointer', 'pointer', 'pointer', 'pointer', 'int', 'int'],
-    'tissue_priors_kernel': ['pointer', 'pointer', 'pointer', 'pointer', 'int', 'int'],
+    'moments_finish_kernel': ['pointer', 'pointer', 'pointer', 'pointer', 'pointer', 'int'],
+    'norm_gelu_kernel': ['pointer', 'pointer', 'pointer', 'pointer', 'int'],
+    'fill_rows_kernel': ['pointer', 'pointer', 'int', 'int'],
+    'classify_u8_kernel': ['pointer'] * 7 + ['int'] * 3,
+    'fill_labels_u8_kernel': ['pointer', 'pointer', 'int', 'int'],
+    'tissue_priors_kernel': ['pointer'] * 7 + ['int'] * 3,
+    'fill_priors_kernel': ['pointer', 'pointer', 'int', 'int'],
+    'pve_blur_kernel': ['pointer', 'pointer', 'int'],
+    'pve_support_kernel': ['pointer', 'pointer'],
     'checksum_kernel': ['pointer', 'pointer', 'size'],
     'fill_pattern_kernel': ['pointer', 'size'],
 }
@@ -74,11 +79,11 @@ def kernels(root=ROOT):
     scalar, wmma = variants(root)
     entries = []
     for v, t in scalar:
-        entries.append(dict(id=f'scalar_{v}_{t}', symbol=f'_Z13conv3d_kernelILi{v}ELi{t}EEvPK6__halfPS0_S2_iiii',
-                            parameters=['pointer'] * 3 + ['int'] * 4, vpt=v, threads=t))
+        entries.append(dict(id=f'scalar_{v}_{t}', symbol=f'_Z13conv3d_kernelILi{v}ELi{t}EEvPK6__halfPS0_S2_PdPKjPKfiiiii',
+                            parameters=['pointer'] * 6 + ['int'] * 5, vpt=v, threads=t))
     for w, in wmma:
-        entries.append(dict(id=f'wmma_{w}', symbol=f'_Z18conv3d_wmma_kernelILi{w}EEvPK6__halfPS0_S2_i',
-                            parameters=['pointer'] * 3 + ['int'], warps=w))
+        entries.append(dict(id=f'wmma_{w}', symbol=f'_Z18conv3d_wmma_kernelILi{w}EEvPK6__halfPS0_S2_PdPKjPKfii',
+                            parameters=['pointer'] * 6 + ['int'] * 2, warps=w))
     entries.extend(dict(id=name, symbol=name, parameters=params) for name, params in AUX.items())
     return entries
 
@@ -130,8 +135,8 @@ def validate_exports(ptx, sass, expected):
                          f'parameters={[k for k in want.keys() & found.keys() if want[k] != found[k]]}')
     versions = set(re.findall(r'\.version\s+(\d+\.\d+)', ptx))
     targets = set(map(int, re.findall(r'\.target\s+sm_(\d+)', ptx)))
-    if versions != {'8.7'} or targets != {PTX_ARCH} or re.search(r'\.extern\s+\.func', ptx):
-        raise ValueError('unexpected PTX version/target or unresolved device-library function')
+    if versions != {PTX_VERSION} or targets != {PTX_ARCH} or re.search(r'\.extern\s+\.func', ptx):
+        raise ValueError(f'unexpected PTX version ({versions}) / target ({targets}) or unresolved device-library function')
     images = {}
     for chunk in re.split(r'arch = sm_', sass)[1:]:
         functions = set(re.findall(r'Function\s*:\s*([\w$]+)', chunk))
@@ -149,7 +154,7 @@ def verify(directory, root=ROOT):
     manifest = json.loads((directory / 'manifest.json').read_text())
     fixed = dict(schema_version=2, abi_version=ABI, nvcc_version=NVCC_VERSION,
                  minimum_driver_api=DRIVER_API, architectures=list(ARCHES), ptx_architecture=PTX_ARCH,
-                 ptx_version='8.7', compiler_flags=list(FLAGS), geometry={m: geometry(root, m) for m in MODELS}, sources=source_hashes(root), kernels=kernels(root))
+                 ptx_version=PTX_VERSION, compiler_flags=list(FLAGS), geometry={m: geometry(root, m) for m in MODELS}, sources=source_hashes(root), kernels=kernels(root))
     for key, value in fixed.items():
         if manifest.get(key) != value:
             raise ValueError('stale/invalid CUDA module metadata: ' + key)
@@ -189,7 +194,7 @@ def generate(directory, nvcc):
         staging = Path(tmp)
         manifest = dict(schema_version=2, abi_version=ABI, nvcc_version=NVCC_VERSION,
                         minimum_driver_api=DRIVER_API, architectures=list(ARCHES), ptx_architecture=PTX_ARCH,
-                        ptx_version='8.7', compiler_flags=list(FLAGS), geometry={m: geometry(ROOT, m) for m in MODELS}, sources=source_hashes(), kernels=kernels(), models={})
+                        ptx_version=PTX_VERSION, compiler_flags=list(FLAGS), geometry={m: geometry(ROOT, m) for m in MODELS}, sources=source_hashes(), kernels=kernels(), models={})
         for model in MODELS:
             target = staging / (model + '.fatbin')
             args = [compiler, *FLAGS, '-DBC_MODEL_IS_' + model.upper() + '=1', '-Imodels/' + model, '--fatbin']

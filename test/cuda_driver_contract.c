@@ -54,9 +54,9 @@ static CUresult kernel(CUfunction f, unsigned gx, unsigned gy, unsigned gz,
     observed = f; grid = gx; block = bx; shared_bytes = sm;
     memcpy(&first_pointer, args[0], sizeof(first_pointer));
     if (f == scalar_3_512) {
-        assert(*(int *)args[3] == 1 && *(int *)args[4] == BC_MODEL_CHAN && *(int *)args[5] == 1);
-        argument_dilation = *(int *)args[6];
-    } else if (f == wmma_24) argument_dilation = *(int *)args[3];
+        assert(*(int *)args[6] == CUDA_ROWS && *(int *)args[7] == 1 && *(int *)args[8] == BC_MODEL_CHAN && *(int *)args[9] == 1);
+        argument_dilation = *(int *)args[10];
+    } else if (f == wmma_24) argument_dilation = *(int *)args[7];
     return launch_failure;
 }
 static void bad_candidate(const bc_act *a, bc_act *b, const bc_act *w, int dilation) {
@@ -88,25 +88,27 @@ int main(void) {
     assert(cuda_parse_schedule("s3x512garbage", BC_MODEL_NHIDDEN, 1, plan));
     assert(cuda_parse_schedule("s3x512,", BC_MODEL_NHIDDEN, 1, plan));
     assert(cuda_parse_schedule("s3x512,w8", BC_MODEL_NHIDDEN, 1, plan));
-    if (CUDA_CS == 24) assert(cuda_parse_schedule("w32", BC_MODEL_NHIDDEN, 1, plan));
+    /* At CS==24 weights are no longer staged in shared memory, so w32 fits 32 KiB <= 48 KiB. */
+    if (CUDA_CS == 24) assert(!cuda_parse_schedule("w32", BC_MODEL_NHIDDEN, 1, plan));
     missing = 5;
     assert(gpu_begin(1) == 1);
     assert(lookups == 5 && unloaded == 1 && destroyed == 1 && restores == 1 && !module && !context);
     missing = lookups = 0;
-    assert(gpu_begin(1) == 0 && lookups == 32 && selected == 1);
-    assert(strstr(module_key, "module-abi2-") == module_key);
+    assert(gpu_begin(1) == 0 && lookups == 36 && selected == 1);
+    assert(strstr(module_key, "module-abi3-") == module_key);
     bc_act *a = (bc_act *)(uintptr_t)0x7000, *b = (bc_act *)(uintptr_t)0x8000;
-    gpu_conv(3, 512, a, b, a, 1, BC_MODEL_CHAN, 1, 4, 27 * CUDA_CS * 2);
+    gpu_conv(3, 512, a, b, a, NULL, NULL, NULL, CUDA_ROWS, 1, BC_MODEL_CHAN, 1, 4, 27 * CUDA_CS * 2);
     assert(observed == scalar_3_512 && block == 512 && grid == (CUDA_NVOX + 1535) / 1536);
     assert(shared_bytes == 27 * CUDA_CS * 2 && first_pointer == a && argument_dilation == 4);
-    gpu_wmma(24, a, b, a, 31);
+    gpu_wmma(24, a, b, a, NULL, NULL, NULL, CUDA_ROWS, 31);
     assert(observed == wmma_24 && block == 768 && grid == ((CUDA_NVOX + 15) / 16 + 23) / 24);
-    assert(shared_bytes == 27 * CUDA_CS * CUDA_CS * 2 + 24 * CUDA_WMMA_SCRATCH && argument_dilation == 31);
-    gpu_priors(17, a, (float *)b, a, NULL, BC_MODEL_CHAN, BC_MODEL_NCLASS);
-    assert(observed == tissue_priors_kernel && grid == 17 && block == CUDA_THREADS);
-    gpu_wmma(0, a, b, a, 1);
+    size_t w_shared = (CUDA_CS == 24) ? 0 : (size_t)27 * CUDA_CS * CUDA_CS * 2;
+    assert(shared_bytes == w_shared + 24 * CUDA_WMMA_SCRATCH && argument_dilation == 31);
+    gpu_priors(a, (float *)b, NULL, NULL, a, NULL, NULL, 17, BC_MODEL_CHAN, BC_MODEL_NCLASS);
+    assert(observed == tissue_priors_kernel && grid == (17u * CUDA_DIM + CUDA_THREADS - 1) / CUDA_THREADS && block == CUDA_THREADS);
+    gpu_wmma(0, a, b, a, NULL, NULL, NULL, CUDA_ROWS, 1);
     assert(gpu_sync() != 0 && gpu_last_error() != 0);
-    gpu_conv(0, 0, a, b, a, 1, BC_MODEL_CHAN, 1, 1, 0);
+    gpu_conv(0, 0, a, b, a, NULL, NULL, NULL, CUDA_ROWS, 1, BC_MODEL_CHAN, 1, 1, 0);
     assert(gpu_sync() != 0 && gpu_last_error() != 0);
 
     launch_failure = 701;

@@ -6,12 +6,14 @@
 #include "cuda_variants.h"
 
 #define X(V, T) template __global__ void conv3d_kernel<V, T>( \
-    const bc_act *, bc_act *, const bc_act *, int, int, int, int);
+    const bc_act *, bc_act *, const bc_act *, double *, const unsigned int *, \
+    const float *, int, int, int, int, int);
 BC_CUDA_SCALAR_VARIANTS(X)
 #undef X
 
 #define X(W) template __global__ void conv3d_wmma_kernel<W>( \
-    const bc_act *, bc_act *, const bc_act *, int);
+    const bc_act *, bc_act *, const bc_act *, double *, const unsigned int *, \
+    const float *, int, int);
 BC_CUDA_WMMA_VARIANTS(X)
 #undef X
 

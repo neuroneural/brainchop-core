@@ -506,10 +506,11 @@ static int metal_segment(const unsigned char *conformed, float *result,
 	if(!conformed||!result||!weights)return 1;
 	if(options&&(options->roi_enabled||options->class_writer))return 2;
 	float *planes=options?options->tissue_planes:NULL;
+	int no_turbo=options&&options->no_turbo;
 	size_t dispatch_count=sizeof(BC_M(_dispatches))/sizeof(BC_M(_dispatches)[0]);
 #if BC_HAS_PVE
 	if(planes) {
-		if(pve_layout_invalid())return 1;
+		if(no_turbo&&pve_layout_invalid())return 1;
 		dispatch_count=BC_M_UC(_CLASSIFIER_DISPATCH);
 	}
 #else
@@ -519,9 +520,9 @@ static int metal_segment(const unsigned char *conformed, float *result,
 		@try {
 			id<MTLDevice> metal=MTLCreateSystemDefaultDevice();
 			if(!metal)return 1;
-			/* The 8-bit path has no tissue-prior head: --pve stays fp16. */
-			if(!planes&&!(options&&options->no_turbo))
-				return run_turbo(metal,conformed,result,weights);
+			if(!no_turbo)
+				return run_turbo(metal,conformed,result,weights,planes,
+					planes?options->tissue_priors_prepared:NULL);
 			return run_generated(metal,conformed,result,weights,
 				BC_M(_source),BC_M(_kernel_names),
 				sizeof(BC_M(_kernel_names))/sizeof(BC_M(_kernel_names)[0]),

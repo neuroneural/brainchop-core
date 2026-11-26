@@ -89,7 +89,8 @@ int main(int argc, char **argv) {
     CUcontext context = NULL;
     CUmodule module = NULL;
     CUdevice device;
-    CUdeviceptr input = 0, output = 0, weights = 0, scratch = 0;
+    CUdeviceptr input = 0, output = 0, weights = 0, wmma_weights = 0, scratch = 0;
+    CUdeviceptr null_ptr = 0;
     CUfunction function;
     CHECK(d.init(0));
     CHECK(d.driver_version(&version));
@@ -114,15 +115,30 @@ int main(int argc, char **argv) {
 
     /* The model has a fixed 256^3 shape. One block writes just the prefix, but
      * neighbouring convolution reads use the full-volume strides. */
-    enum { CS = BC_CUDA_MODULE_CS };
+    enum { CS = BC_CUDA_MODULE_CS, WMMA_TAPS = (CS == 24) ? 27 * 1024 : 27 * CS * CS };
     size_t elements = (size_t)256 * 256 * 256 * CS;
     uint16_t expected[128 * CS], actual[128 * CS], taps[27 * CS * CS] = {0};
+    uint16_t wmma_taps[WMMA_TAPS] = {0};
     for (int c = 0; c < CS; c++) taps[13 * CS * CS + c * CS + c] = 0x3c00; /* fp16 one */
+    if (CS == 24) {
+        for (int tap = 0; tap < 27; tap++)
+            for (int k = 0; k < 2; k++)
+            for (int n = 0; n < 2; n++)
+                for (int r = 0; r < 16; r++)
+                    for (int c = 0; c < 16; c++) {
+                        int ic = k * 16 + r, oc = n * 16 + c;
+                        if (ic < 24 && oc < 24)
+                            wmma_taps[((tap * 4 + k * 2 + n) * 16 + r) * 16 + c] =
+                                taps[tap * 24 * 24 + ic * 24 + oc];
+                    }
+    } else memcpy(wmma_taps, taps, sizeof(taps));
     CHECK(d.alloc(&input, elements * sizeof(uint16_t)));
     CHECK(d.alloc(&output, sizeof(actual)));
     CHECK(d.alloc(&weights, sizeof(taps)));
+    CHECK(d.alloc(&wmma_weights, sizeof(wmma_taps)));
     CHECK(d.alloc(&scratch, sizeof(unsigned long long)));
     CHECK(d.copy_htod(weights, taps, sizeof(taps)));
+    CHECK(d.copy_htod(wmma_weights, wmma_taps, sizeof(wmma_taps)));
     CHECK(d.function_get(&function, module, "fill_pattern_kernel"));
     void *fill_args[] = {&input, &elements};
     CHECK(d.launch(function, 256, 1, 1, 128, 1, 1, 0, NULL, fill_args, NULL));
@@ -139,8 +155,9 @@ int main(int argc, char **argv) {
 #undef X
     if (!scalar_symbol) { fprintf(stderr, "smoke test needs the 1/128 scalar variant\n"); goto cleanup; }
     CHECK(d.function_get(&function, module, scalar_symbol));
-    int channels = CS, stride = CS, dilation = 1;
-    void *scalar_args[] = {&input, &output, &weights, &channels, &channels, &stride, &dilation};
+    int rows = 65536, channels = CS, stride = CS, dilation = 1;
+    void *scalar_args[] = {&input, &output, &weights, &null_ptr, &null_ptr, &null_ptr,
+        &rows, &channels, &channels, &stride, &dilation};
     CHECK(d.launch(function, 1, 1, 1, 128, 1, 1, sizeof(taps), NULL, scalar_args, NULL));
     CHECK(d.sync());
     CHECK(d.copy_dtoh(actual, output, sizeof(actual)));
@@ -164,6 +181,7 @@ int main(int argc, char **argv) {
     CHECK(d.sync());
     CHECK(d.copy_dtoh(&wmma, scratch, sizeof(wmma)));
     if (wmma != (major >= 7)) { fprintf(stderr, "WMMA compiled-code probe mismatch\n"); goto cleanup; }
+    unsigned wmma_shared = (CS == 24 ? 0u : (unsigned)sizeof(taps)) + 2u * BC_CUDA_MODULE_WMMA_SCRATCH;
     if (wmma) {
         const char *wmma_symbol = NULL;
 #define X(w, symbol) if (w == 2) wmma_symbol = symbol;
@@ -172,8 +190,9 @@ int main(int argc, char **argv) {
         if (!wmma_symbol) { fprintf(stderr, "smoke test needs the two-warp variant\n"); goto cleanup; }
         CHECK(d.memset_d8(output, 0xff, sizeof(actual)));
         CHECK(d.function_get(&function, module, wmma_symbol));
-        void *wmma_args[] = {&input, &output, &weights, &dilation};
-        CHECK(d.launch(function, 1, 1, 1, 64, 1, 1, sizeof(taps) + 2 * BC_CUDA_MODULE_WMMA_SCRATCH, NULL, wmma_args, NULL));
+        void *wmma_args[] = {&input, &output, &wmma_weights, &null_ptr, &null_ptr, &null_ptr,
+            &rows, &dilation};
+        CHECK(d.launch(function, 1, 1, 1, 64, 1, 1, wmma_shared, NULL, wmma_args, NULL));
         CHECK(d.sync());
         CHECK(d.copy_dtoh(actual, output, 32 * CS * sizeof(uint16_t)));
         if (memcmp(actual, expected, 32 * CS * sizeof(uint16_t))) { fprintf(stderr, "WMMA identity convolution failed\n"); goto cleanup; }
@@ -186,9 +205,23 @@ int main(int argc, char **argv) {
         for (int side = -1; side <= 1; side += 2)
         for (int distance = 1; distance <= 31; distance += 30) {
             memset(taps, 0, sizeof(taps));
+            memset(wmma_taps, 0, sizeof(wmma_taps));
             for (int c = 0; c < CS; c++)
                 taps[(13 + side) * CS * CS + ((c + 17) % CS) * CS + c] = 0x3c00;
+            if (CS == 24) {
+                for (int tap = 0; tap < 27; tap++)
+                    for (int k = 0; k < 2; k++)
+                    for (int n = 0; n < 2; n++)
+                        for (int r = 0; r < 16; r++)
+                            for (int c = 0; c < 16; c++) {
+                                int ic = k * 16 + r, oc = n * 16 + c;
+                                if (ic < 24 && oc < 24)
+                                    wmma_taps[((tap * 4 + k * 2 + n) * 16 + r) * 16 + c] =
+                                        taps[tap * 24 * 24 + ic * 24 + oc];
+                            }
+            } else memcpy(wmma_taps, taps, sizeof(taps));
             CHECK(d.copy_htod(weights, taps, sizeof(taps)));
+            CHECK(d.copy_htod(wmma_weights, wmma_taps, sizeof(wmma_taps)));
             dilation = distance;
             for (int v = 0; v < 128; v++)
                 for (int c = 0; c < CS; c++) {
@@ -208,9 +241,9 @@ int main(int argc, char **argv) {
                 BC_CUDA_MODULE_WMMA(X)
 #undef X
                 CHECK(d.function_get(&function, module, symbol));
-                void *args[] = {&input, &output, &weights, &dilation};
-                CHECK(d.launch(function, 1, 1, 1, 64, 1, 1,
-                    sizeof(taps) + 2 * BC_CUDA_MODULE_WMMA_SCRATCH, NULL, args, NULL));
+                void *args[] = {&input, &output, &wmma_weights, &null_ptr, &null_ptr, &null_ptr,
+                    &rows, &dilation};
+                CHECK(d.launch(function, 1, 1, 1, 64, 1, 1, wmma_shared, NULL, args, NULL));
                 CHECK(d.sync());
                 CHECK(d.copy_dtoh(actual, output, 32 * CS * sizeof(uint16_t)));
                 if (memcmp(actual, expected, 32 * CS * sizeof(uint16_t))) {
@@ -230,7 +263,8 @@ int main(int argc, char **argv) {
         CHECK(d.alloc(&output, BC_PRIOR_PLANES * voxels * sizeof(float)));
         CUdeviceptr bias = weights + BC_MODEL_CHAN * 18 * sizeof(uint16_t);
         int logical = BC_MODEL_CHAN, classes = 18;
-        void *args[] = {&input, &output, &weights, &bias, &logical, &classes};
+        void *args[] = {&input, &output, &null_ptr, &null_ptr, &weights, &bias,
+            &null_ptr, &rows, &logical, &classes};
         CHECK(d.function_get(&function, module, "tissue_priors_kernel"));
         CHECK(d.launch(function, 1, 1, 1, 128, 1, 1, 0, NULL, args, NULL));
         CHECK(d.sync());
@@ -266,6 +300,7 @@ int main(int argc, char **argv) {
     result = 0;
 cleanup:
     if (scratch) d.free(scratch);
+    if (wmma_weights) d.free(wmma_weights);
     if (weights) d.free(weights);
     if (output) d.free(output);
     if (input) d.free(input);

@@ -728,17 +728,18 @@ static int segment_checked(const bc_backend *backend, const nifti_image *image,
 	return failed;
 }
 
-static int run_model(nifti_image *original, int input_datatype,
+static int run_model_ex(nifti_image *original, int input_datatype,
 		int mindgrab_output, const float *weights, const bc_backend *backend,
-		int allow_fallback, const bc_cli_options *cli, nifti_image **output) {
+		int allow_fallback, const bc_cli_options *cli, nifti_image **output,
+		int consume_input) {
 	*output=NULL;
 	int preserve_encoding=mindgrab_output && integer_input(original);
 	bc_stage(NULL);
 	nifti_image *conformed;
-	if (mindgrab_output) {
+	if (!consume_input || mindgrab_output) {
 		conformed=private_float_copy(original);
 	} else {
-		/* Label and --pve models never read original->data again (only its
+		/* Label and --pve CLI runs never read original->data again (only its
 		   header/sform for native-space reslicing). Move the sanitized float
 		   buffer directly into conformed to skip a 67.1 MB allocation+copy. */
 		conformed=copy_header(original);
@@ -981,6 +982,16 @@ static int has_suffix_ci(const char *path, const char *suffix) {
 	return 1;
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
+static inline int run_model(nifti_image *original, int input_datatype,
+		int mindgrab_output, const float *weights, const bc_backend *backend,
+		int allow_fallback, const bc_cli_options *cli, nifti_image **output) {
+	return run_model_ex(original, input_datatype, mindgrab_output, weights,
+		backend, allow_fallback, cli, output, 0);
+}
+
 int main(int argc, char **argv) {
 	bc_cli_options cli;
 	int parse_status=bc_cli_parse(argc,argv,&cli);
@@ -1127,8 +1138,8 @@ int main(int argc, char **argv) {
 	int preserve_encoding=mindgrab_output && integer_input(nim);
 	if ((!preserve_encoding &&
 		 (brainchopc_convert(nim,DT_FLOAT32) || sanitize_input(nim,input_datatype))) ||
-	    run_model(nim,input_datatype,mindgrab_output,weights,backend,automatic_backend,
-			&cli,&output)) {
+	    run_model_ex(nim,input_datatype,mindgrab_output,weights,backend,automatic_backend,
+			&cli,&output,!mindgrab_output)) {
 		free(weights);nifti_image_free(nim); return 1;
 	}
 	free(weights);

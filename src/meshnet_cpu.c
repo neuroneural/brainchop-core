@@ -807,9 +807,10 @@ int meshnet_cpu_infer(const unsigned char *conformed, float *labels,
 	if (!(options && (options->no_turbo || options->roi_enabled || options->class_writer ||
 			options->tissue_planes))) {
 		mt_block_fn block2, block1;
-		const char *kernel = mt_select(&block2, &block1);
+		int mode = MT_MODE_INT8;
+		const char *kernel = mt_select_ex(&block2, &block1, &mode);
 		if (kernel) {
-			return mt_infer(conformed, labels, plan, block2, block1, kernel);
+			return mt_infer(conformed, labels, plan, block2, block1, kernel, mode);
 		}
 #ifndef __EMSCRIPTEN__ /* wasm has no turbo kernels */
 		printfx("%s: this CPU lacks i8mm/DotProd/AVX2; turbo runs the exact engine\n", BC_MODEL_NAME);

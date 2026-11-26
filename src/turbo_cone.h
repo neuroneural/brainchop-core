@@ -81,9 +81,14 @@ static int bc_tc_count(const uint8_t *m) {
 }
 #endif
 
-/* Returns 0, or 1 when out of memory. */
-static int bc_tc_make(const unsigned char *conformed, const int *dilation, bc_tc_plan *p) {
+/* Returns 0, or 1 when out of memory.
+   allow_cone=1 enables both exact pure-background copies (PURE) and the
+   approximate backward-cone lattice (CONE); allow_cone=0 uses exact PURE only
+   (0.000 Dice/voxel drift from full-volume moments). */
+static int bc_tc_make_ex(const unsigned char *conformed, const int *dilation,
+		bc_tc_plan *p, int allow_cone) {
 	enum { L = BC_MODEL_NHIDDEN, N = BC_TC_ROWS };
+	(void)conformed; (void)dilation; (void)allow_cone;
 	memset(p, 0, sizeof *p);
 	/* Every layer lists N rows at most (a pure layer's computed and copied rows
 	   partition them), plus the classifier rows. */
@@ -129,43 +134,45 @@ static int bc_tc_make(const unsigned char *conformed, const int *dilation, bc_tc
 			mode[l] = work[l] < N ? BC_TC_PURE : BC_TC_FULL;
 			prev = cur;
 		}
-		/* Backward: cone = cone of the labelled rows; comp adds the lattice
-		   and the support the next layer's computed rows read. */
-		for (int z = 0; z < 256; z++) for (int y = 0; y < 256; y++) {
-			int any = 0;
-			for (int zz = z - 3; !any && zz <= z + 3; zz++) for (int yy = y - 3; !any && yy <= y + 3; yy++)
-				any = zz >= 0 && zz < 256 && yy >= 0 && yy < 256 && head[zz * 256 + yy];
-			cls[z * 256 + y] = (uint8_t)any;
-		}
-		/* 1024 rows, one per 8x8 cell, jittered (V4: a Korobov lattice of
-		   256-512 four-row strips). */
-		for (int i = 0; i < 32; i++) for (int j = 0; j < 32; j++)
-			lat[(8 * i + ((3 * i + 5 * j) & 7)) * 256 + 8 * j + ((5 * i + 3 * j) & 7)] = 1;
-		/* V4's thresholds: cone only if it skips >3.6% of labels, per layer
-		   only if it computes <15/16 of rows. */
-		if (bc_tc_count(cls) < N * 964 / 1000) {
-			for (int l = L - 1; l >= 0; l--) {
-				uint8_t *ml = cone + (size_t)l * N, *cl = comp + (size_t)l * N;
-				if (l == L - 1) {
-					memcpy(ml, cls, N);
-					memset(tmp, 0, N);
-				} else {
-					bc_tc_spread(cone + (size_t)(l + 1) * N, ml, dilation[l + 1]);
-					bc_tc_spread(comp + (size_t)(l + 1) * N, tmp, dilation[l + 1]);
-				}
-				int nlat = 0, ncomp = 0;
-				for (int r = 0; r < N; r++) {
-					cl[r] = ml[r] ? 1 : lat[r] ? 2 : tmp[r] ? 3 : 0;
-					nlat += cl[r] == 2;
-					ncomp += cl[r] != 0;
-				}
-				if (nlat && ncomp <= N * 15 / 16 && ncomp < work[l]) mode[l] = BC_TC_CONE;
-				if (ncomp > N * 15 / 16) break; /* earlier layers only grow */
+		if (allow_cone) {
+			/* Backward: cone = cone of the labelled rows; comp adds the lattice
+			   and the support the next layer's computed rows read. */
+			for (int z = 0; z < 256; z++) for (int y = 0; y < 256; y++) {
+				int any = 0;
+				for (int zz = z - 3; !any && zz <= z + 3; zz++) for (int yy = y - 3; !any && yy <= y + 3; yy++)
+					any = zz >= 0 && zz < 256 && yy >= 0 && yy < 256 && head[zz * 256 + yy];
+				cls[z * 256 + y] = (uint8_t)any;
 			}
-			/* A cone layer computes only what the next layer reads, so it must
-			   be followed by one. */
-			for (int l = L - 2; l >= 0; l--)
-				if (mode[l] == BC_TC_CONE && mode[l + 1] != BC_TC_CONE) mode[l] = BC_TC_FULL;
+			/* 1024 rows, one per 8x8 cell, jittered (V4: a Korobov lattice of
+			   256-512 four-row strips). */
+			for (int i = 0; i < 32; i++) for (int j = 0; j < 32; j++)
+				lat[(8 * i + ((3 * i + 5 * j) & 7)) * 256 + 8 * j + ((5 * i + 3 * j) & 7)] = 1;
+			/* V4's thresholds: cone only if it skips >3.6% of labels, per layer
+			   only if it computes <15/16 of rows. */
+			if (bc_tc_count(cls) < N * 964 / 1000) {
+				for (int l = L - 1; l >= 0; l--) {
+					uint8_t *ml = cone + (size_t)l * N, *cl = comp + (size_t)l * N;
+					if (l == L - 1) {
+						memcpy(ml, cls, N);
+						memset(tmp, 0, N);
+					} else {
+						bc_tc_spread(cone + (size_t)(l + 1) * N, ml, dilation[l + 1]);
+						bc_tc_spread(comp + (size_t)(l + 1) * N, tmp, dilation[l + 1]);
+					}
+					int nlat = 0, ncomp = 0;
+					for (int r = 0; r < N; r++) {
+						cl[r] = ml[r] ? 1 : lat[r] ? 2 : tmp[r] ? 3 : 0;
+						nlat += cl[r] == 2;
+						ncomp += cl[r] != 0;
+					}
+					if (nlat && ncomp <= N * 15 / 16 && ncomp < work[l]) mode[l] = BC_TC_CONE;
+					if (ncomp > N * 15 / 16) break; /* earlier layers only grow */
+				}
+				/* A cone layer computes only what the next layer reads, so it must
+				   be followed by one. */
+				for (int l = L - 2; l >= 0; l--)
+					if (mode[l] == BC_TC_CONE && mode[l + 1] != BC_TC_CONE) mode[l] = BC_TC_FULL;
+			}
 		}
 	}
 #endif
@@ -212,6 +219,10 @@ static int bc_tc_make(const unsigned char *conformed, const int *dilation, bc_tc
 	free(m);
 #endif
 	return 0;
+}
+
+static inline int bc_tc_make(const unsigned char *conformed, const int *dilation, bc_tc_plan *p) {
+	return bc_tc_make_ex(conformed, dilation, p, 1);
 }
 
 #endif

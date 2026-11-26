@@ -51,7 +51,8 @@ static int check_kernel_exact(const char *name, mt_block_fn block2, mt_block_fn 
 
 int main(void) {
 	mt_block_fn block2, block1;
-	const char *kname = mt_select(&block2, &block1);
+	int mode = MT_MODE_INT8;
+	const char *kname = mt_select_ex(&block2, &block1, &mode);
 	if (!kname) {
 		printf("cpu_turbo_check: SKIP, this CPU has no i8mm/DotProd/AVX2 kernel\n");
 		return 0;
@@ -71,7 +72,8 @@ int main(void) {
 		if (dotprod) mismatches += check_kernel_exact("sdot", mt_sdot_block2, mt_sdot_block1);
 	}
 #elif (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
-	if (strcmp(kname, "avx2") != 0 && __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma"))
+	if (strcmp(kname, "avx2") != 0 && strcmp(kname, "avx512f") != 0 &&
+			__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma"))
 		mismatches += check_kernel_exact("avx2", mt_avx2_block2, mt_avx2_block1);
 #endif
 
@@ -174,11 +176,11 @@ int main(void) {
 		for (int y = 0; y < MN_DIM; y++) {
 			row_list[y] = (uint32_t)(z * MN_DIM + y);
 			row_wt[y] = 1.0f;
-			mt_conv_row_compute(codes, z, y, cases[k].d, wq, tap_sum, scale, block2, block1, 0,
+			mt_conv_row_compute(codes, z, y, cases[k].d, wq, kernel, tap_sum, scale, block2, block1, MT_MODE_INT8,
 				got + ((size_t)z * MN_DIM + (size_t)y) * MN_DIM * MN_CS);
 		}
-		mt_conv_slab conv = { codes, y8, ymom, wq, tap_sum, scale, block2, block1, cases[k].d,
-			row_list, row_wt, 0, MN_DIM, partial, range, 0 };
+		mt_conv_slab conv = { codes, y8, ymom, wq, kernel, tap_sum, scale, block2, block1, cases[k].d,
+			row_list, row_wt, 0, MN_DIM, partial, range, MT_MODE_INT8 };
 		mt_conv_bins(&conv, 0, MT_STAT_BINS - 1);
 		mn_conv_hidden_slab exact = { exact_in, want, kernel, cases[k].d, &region };
 		mn_conv_hidden_rows(&exact, z, z);
@@ -202,6 +204,43 @@ int main(void) {
 	}
 	printf("cpu_turbo_check: conv %s\n", bad ? "FAIL" : "ok");
 
+#if defined(__x86_64__) || defined(_M_X64)
+	if (mode == MT_MODE_X86_F16_AVX512 || mode == MT_MODE_X86_F16_AVX2) {
+		uint16_t *hcodes = (uint16_t *)codes;
+		for (int k = 0; k < 3; k++)
+			for (size_t v = slab_low[k] * slice; v < (slab_high[k] + 1) * slice; v++) {
+				float tmp[MN_CS];
+				for (int c = 0; c < MN_CS; c++)
+					tmp[c] = c < BC_MODEL_CHAN ? (((int)(RAND() % 8001) - 4000) * 0.001f) : 0.0f;
+				mt_store_f16_x86(hcodes + v * MN_CS, tmp);
+				mt_load_f16_x86(exact_in + v * MN_CS, hcodes + v * MN_CS);
+			}
+		int f16_bad = 0;
+		int test_modes[2] = { MT_MODE_X86_F16_AVX2, mode == MT_MODE_X86_F16_AVX512 ? MT_MODE_X86_F16_AVX512 : 0 };
+		for (int mi = 0; mi < 2; mi++) {
+			int tm = test_modes[mi];
+			if (!tm) continue;
+			for (size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
+				int z = cases[k].z;
+				for (int y = 0; y < MN_DIM; y++)
+					mt_conv_row_compute(codes, z, y, cases[k].d, wq, kernel, tap_sum, scale,
+						block2, block1, tm, got + ((size_t)z * MN_DIM + (size_t)y) * MN_DIM * MN_CS);
+				mn_conv_hidden_slab exact = { exact_in, want, kernel, cases[k].d, &region };
+				mn_conv_hidden_rows(&exact, z, z);
+				double err = 0, peak = 0;
+				for (size_t i = (size_t)z * slice * MN_CS; i < (size_t)(z + 1) * slice * MN_CS; i++) {
+					err = fmax(err, fabs((double)got[i] - want[i]));
+					peak = fmax(peak, fabs((double)want[i]));
+				}
+				f16_bad += !(err <= 2e-5 * peak);
+				printf("cpu_turbo_check: x86-f16(%s) d=%2d z=%3d rel_err=%.2g\n",
+					tm == MT_MODE_X86_F16_AVX512 ? "avx512f" : "avx2", cases[k].d, z, err / peak);
+			}
+		}
+		printf("cpu_turbo_check: x86-f16 %s\n", f16_bad ? "FAIL" : "ok");
+		bad += f16_bad;
+	}
+#endif
 #if MN_SME
 	if (mt_sme_available()) {
 		float16_t *half = (float16_t *)codes;
@@ -218,7 +257,7 @@ int main(void) {
 		for (size_t k = 0; k < sizeof cases / sizeof *cases; k++) {
 			int z = cases[k].z;
 			for (int y = 0; y < MN_DIM; y++)
-				mt_conv_row_compute(codes, z, y, cases[k].d, wq, tap_sum, scale, block2, block1, 1,
+				mt_conv_row_compute(codes, z, y, cases[k].d, wq, kernel, tap_sum, scale, block2, block1, MT_MODE_SME,
 					got + ((size_t)z * MN_DIM + (size_t)y) * MN_DIM * MN_CS);
 			mn_conv_hidden_slab exact = { exact_in, want, kernel, cases[k].d, &region };
 			mn_conv_hidden_rows(&exact, z, z);

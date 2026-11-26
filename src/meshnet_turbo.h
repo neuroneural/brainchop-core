@@ -3,18 +3,19 @@
  * Included only by meshnet_cpu.c, after the exact engine, whose normalization
  * and exact path stay the fixture-gated reference.
  *
- * Activations and weights use hi + lo/128. Three byte dot products compute
- * hi*hi and hi*lo + lo*hi; omitting lo*lo/16384 keeps two accumulators.
- * GroupNorm/GELU run in float; intermediate pre-norm outputs are quantized
- * per 64-voxel block into uint8_t (`y8`) in L1 cache while fusing moments,
- * eliminating the 1.61 GB float `y` buffer (~2.42 GiB -> ~1.22 GiB at 24ch,
- * ~0.84 GiB at 16ch). Row work follows turbo_cone.h (pure background copies
- * and backward-cone exterior sampling).
+ * Storage is 2 bytes/channel (`codes`: int8 hi+lo on USDOT/SDOT/VNNI, or fp16
+ * on Apple SME and x86-64 AVX-512F/AVX2+F16C) plus 1 byte/channel block-quantized
+ * pre-norm `y8` (64-voxel blocks, fused moments in L1), eliminating the 1.61 GB
+ * float `y` buffer (~3.22 GiB exact -> ~1.26 GiB at 24ch, ~0.84 GiB at 16ch).
+ * Row work follows turbo_cone.h exact pure-background skip (BC_TC_PURE).
  *
- * Runs on arm64 i8mm USDOT or ARMv8.2 DotProd SDOT (Apple M1+, Cortex-A76+),
- * and x86-64 AVX-512 VNNI, AVX-VNNI, or AVX2+FMA, with every integer kernel
- * bit-identical to the scalar reference (test/cpu_turbo_check.c). Apple SME
- * instead uses fp16 operands and fp32 sums, with the same two-byte storage.
+ * Kernel selection:
+ *  - arm64: Apple SME fp16 -> i8mm USDOT (int8) -> ARMv8.2 DotProd SDOT (int8).
+ *  - x86-64: AVX-512 VNNI (int8) -> AVX-VNNI (int8) -> AVX-512F+F16C (fp16/fp32
+ *    FMA, 32 MACs/cycle) -> AVX2+FMA+F16C (fp16/fp32 FMA, 16 MACs/cycle) ->
+ *    AVX2+FMA (int8).
+ * Every integer kernel is bit-identical to the scalar reference; fp16 kernels
+ * match the exact fp32 oracle within 2e-5 * peak (test/cpu_turbo_check.c).
  */
 #ifndef BRAINCHOPC_MESHNET_TURBO_H
 #define BRAINCHOPC_MESHNET_TURBO_H
@@ -50,7 +51,7 @@
 /* GELU's minimum is -0.17. The residual byte is centered at 64. */
 #define MT_ZP 7
 #define MT_G (MN_CS / 4)
-#define MT_AS (2 * MN_CS) /* per voxel: coarse channels, then residuals */
+#define MT_AS (2 * MN_CS) /* per voxel: coarse+residual u8, or MN_CS fp16 */
 #define MT_RES_ZP 64
 /* A u8 activation volume is read 16 bytes at a time past its last voxel. */
 #define MT_ACT_PAD 16
@@ -63,22 +64,21 @@
 _Static_assert(MT_ZP != 0, "MT_ZP must be nonzero for sdot bias recovery");
 _Static_assert(MN_DIM % MT_YBLK == 0, "MN_DIM must divide by MT_YBLK");
 
-/*
- * Weights are split per output channel: w = (hi + lo / 128) * s, hi and lo s8,
- * ~15 bits. Plain s8 weights cost 1.5-3 points of agreement (docs/audit-history.md).
- * Per tap the hi block then the lo block, each [ic/4][oc][4]: four input
- * channels of one output channel adjacent, as USDOT/SDOT and VPDPBUSD/AVX2
- * consume them. corr includes both activation zero points. The low accumulator
- * contains both cross products; scale is [s oc..., s/128 oc...]. Every kernel
- * combines as fma(lo, s_lo, hi * s_hi), so all are bit-identical to scalar.
- */
+/* Compute mode for hidden convolutions. */
+enum {
+	MT_MODE_INT8 = 0,
+	MT_MODE_SME  = 1,
+	MT_MODE_X86_F16_AVX2   = 2,
+	MT_MODE_X86_F16_AVX512 = 3
+};
+
 #define MT_TAP (2 * MN_CS * MN_CS)
 typedef void (*mt_block_fn)(const uint8_t *src, size_t x, const ptrdiff_t *tap_voxel,
 	const int8_t *const *tap_w, int ntap, const int32_t *corr, const float *scale, float *out);
 
 static inline int mt_widx(int ic, int oc) { return ((ic >> 2) * MN_CS + oc) * 4 + (ic & 3); }
 
-/* The reference every kernel must match bit for bit (test/cpu_turbo_check.c). */
+/* The reference every integer kernel must match bit for bit (test/cpu_turbo_check.c). */
 #ifdef BC_CPU_TURBO_CHECK
 #define MT_DEFINE_SCALAR(NB) \
 static void mt_scalar_block##NB(const uint8_t *src, size_t x, const ptrdiff_t *tap_voxel, \
@@ -264,15 +264,7 @@ MT_DEFINE_X86(mt_vnni512_block, "avx2,fma,avx512f,avx512vl,avx512vnni", _mm256_d
 MT_DEFINE_X86(mt_avxvnni_block, "avx2,fma,avxvnni", _mm256_dpbusd_avx_epi32, 1)
 MT_DEFINE_X86(mt_avxvnni_block, "avx2,fma,avxvnni", _mm256_dpbusd_avx_epi32, 2)
 
-/*
- * Overflow-free AVX2+FMA kernel for x86-64 CPUs without VNNI (Haswell through
- * Skylake-SP, Zen 1-3). vpmaddubsw saturates at int16 (+-32767), so raw a*wh
- * could saturate (255*127*2 = 64770). Splitting a = 2*(a>>1) + (a&1) keeps
- * every pair sum strictly in bounds:
- *   (a>>1)*wh <= 127*127*2 = 32258,  (a&1)*wh <= 1*127*2 = 254,
- *   a*wl      <= 255*64*2  = 32640,  r*wh     <= 127*127*2 = 32258.
- * Processing wh then wl keeps live YMM registers <= 16 at NB=2, CS=24.
- */
+/* Overflow-free AVX2+FMA integer fallback (for CPUs without VNNI or F16C). */
 #define MT_DEFINE_AVX2(NB) \
 __attribute__((target("avx2,fma"))) \
 static void mt_avx2_block##NB(const uint8_t *src, size_t x, const ptrdiff_t *tap_voxel, \
@@ -321,11 +313,182 @@ static void mt_avx2_block##NB(const uint8_t *src, size_t x, const ptrdiff_t *tap
 }
 MT_DEFINE_AVX2(1)
 MT_DEFINE_AVX2(2)
+
+/*
+ * Fast x86-64 fp16-storage + fp32-FMA hidden convolutions for CPUs without VNNI
+ * (Haswell through Skylake-SP/Cascade Lake, AMD Zen 1-3). Emulating 15-bit int8
+ * with vpmaddubsw yields 5.3 MACs/cycle, whereas fp32 FMA hits 16 MACs/cycle
+ * (AVX2) or 32 MACs/cycle (AVX-512F) with hardware F16C conversion and the
+ * exact same 2-byte/channel activation storage (`codes` + `y8`, -61% RAM).
+ */
+__attribute__((target("avx2,fma,f16c")))
+static void mt_f16_avx2_segment(const uint8_t *src, int x0, int x1,
+		const ptrdiff_t *tap_voxel, const float *const *tap_wf, int ntap, float *out) {
+	const uint16_t *hsrc = (const uint16_t *)src;
+	int x = x0;
+	for (; x + 4 <= x1; x += 4) {
+		__m256 acc[4][MT_O8];
+		for (int b = 0; b < 4; b++)
+			for (int o = 0; o < MT_O8; o++) acc[b][o] = _mm256_setzero_ps();
+		for (int t = 0; t < ntap; t++) {
+			const uint16_t *in = hsrc + (size_t)(tap_voxel[t] + x) * MN_CS;
+			const float *tw = tap_wf[t];
+			float iv[4][MN_CS];
+			for (int b = 0; b < 4; b++)
+				for (int o = 0; o < MT_O8; o++)
+					_mm256_storeu_ps(&iv[b][8 * o],
+						_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(in + b * MN_CS + 8 * o))));
+			for (int ic = 0; ic < BC_MODEL_CHAN; ic++) {
+				const float *w = tw + (size_t)ic * MN_CS;
+				for (int o = 0; o < MT_O8; o++) {
+					__m256 wv = _mm256_loadu_ps(w + 8 * o);
+					for (int b = 0; b < 4; b++)
+						acc[b][o] = _mm256_fmadd_ps(_mm256_set1_ps(iv[b][ic]), wv, acc[b][o]);
+				}
+			}
+		}
+		for (int b = 0; b < 4; b++)
+			for (int o = 0; o < MT_O8; o++)
+				_mm256_storeu_ps(out + (size_t)(x + b) * MN_CS + 8 * o, acc[b][o]);
+	}
+	for (; x < x1; x++) {
+		__m256 acc[MT_O8];
+		for (int o = 0; o < MT_O8; o++) acc[o] = _mm256_setzero_ps();
+		for (int t = 0; t < ntap; t++) {
+			const uint16_t *in = hsrc + (size_t)(tap_voxel[t] + x) * MN_CS;
+			const float *tw = tap_wf[t];
+			float iv[MN_CS];
+			for (int o = 0; o < MT_O8; o++)
+				_mm256_storeu_ps(&iv[8 * o],
+					_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(in + 8 * o))));
+			for (int ic = 0; ic < BC_MODEL_CHAN; ic++) {
+				const float *w = tw + (size_t)ic * MN_CS;
+				__m256 xv = _mm256_set1_ps(iv[ic]);
+				for (int o = 0; o < MT_O8; o++)
+					acc[o] = _mm256_fmadd_ps(xv, _mm256_loadu_ps(w + 8 * o), acc[o]);
+			}
+		}
+		for (int o = 0; o < MT_O8; o++)
+			_mm256_storeu_ps(out + (size_t)x * MN_CS + 8 * o, acc[o]);
+	}
+}
+
+#if MN_CS == 24 || defined(BC_CPU_TURBO_CHECK)
+__attribute__((target("avx512f,fma,f16c")))
+static void mt_f16_avx512_segment(const uint8_t *src, int x0, int x1,
+		const ptrdiff_t *tap_voxel, const float *const *tap_wf, int ntap, float *out) {
+	const uint16_t *hsrc = (const uint16_t *)src;
+	int x = x0;
+	for (; x + 8 <= x1; x += 8) {
+		__m512 acc0[8];
+#if MN_CS == 24
+		__m256 acc1[8];
+#endif
+		for (int b = 0; b < 8; b++) {
+			acc0[b] = _mm512_setzero_ps();
+#if MN_CS == 24
+			acc1[b] = _mm256_setzero_ps();
+#endif
+		}
+		for (int t = 0; t < ntap; t++) {
+			const uint16_t *in = hsrc + (size_t)(tap_voxel[t] + x) * MN_CS;
+			const float *tw = tap_wf[t];
+			float iv[8][MN_CS];
+			for (int b = 0; b < 8; b++) {
+				_mm512_storeu_ps(&iv[b][0],
+					_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(in + b * MN_CS))));
+#if MN_CS == 24
+				_mm256_storeu_ps(&iv[b][16],
+					_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(in + b * MN_CS + 16))));
+#endif
+			}
+			for (int ic = 0; ic < BC_MODEL_CHAN; ic++) {
+				const float *w = tw + (size_t)ic * MN_CS;
+				__m512 w0 = _mm512_loadu_ps(w);
+#if MN_CS == 24
+				__m256 w1 = _mm256_loadu_ps(w + 16);
+#endif
+				for (int b = 0; b < 8; b++) {
+					float v = iv[b][ic];
+					acc0[b] = _mm512_fmadd_ps(_mm512_set1_ps(v), w0, acc0[b]);
+#if MN_CS == 24
+					acc1[b] = _mm256_fmadd_ps(_mm256_set1_ps(v), w1, acc1[b]);
+#endif
+				}
+			}
+		}
+		for (int b = 0; b < 8; b++) {
+			_mm512_storeu_ps(out + (size_t)(x + b) * MN_CS, acc0[b]);
+#if MN_CS == 24
+			_mm256_storeu_ps(out + (size_t)(x + b) * MN_CS + 16, acc1[b]);
+#endif
+		}
+	}
+	for (; x < x1; x++) {
+		__m512 acc0 = _mm512_setzero_ps();
+#if MN_CS == 24
+		__m256 acc1 = _mm256_setzero_ps();
+#endif
+		for (int t = 0; t < ntap; t++) {
+			const uint16_t *in = hsrc + (size_t)(tap_voxel[t] + x) * MN_CS;
+			const float *tw = tap_wf[t];
+			float iv[MN_CS];
+			_mm512_storeu_ps(&iv[0], _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)in)));
+#if MN_CS == 24
+			_mm256_storeu_ps(&iv[16], _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(in + 16))));
+#endif
+			for (int ic = 0; ic < BC_MODEL_CHAN; ic++) {
+				const float *w = tw + (size_t)ic * MN_CS;
+				float v = iv[ic];
+				acc0 = _mm512_fmadd_ps(_mm512_set1_ps(v), _mm512_loadu_ps(w), acc0);
+#if MN_CS == 24
+				acc1 = _mm256_fmadd_ps(_mm256_set1_ps(v), _mm256_loadu_ps(w + 16), acc1);
+#endif
+			}
+		}
+		_mm512_storeu_ps(out + (size_t)x * MN_CS, acc0);
+#if MN_CS == 24
+		_mm256_storeu_ps(out + (size_t)x * MN_CS + 16, acc1);
+#endif
+	}
+}
+#endif
+
+__attribute__((target("avx2,fma,f16c")))
+static void mt_store_f16_x86(uint16_t *dst, const float *src) {
+	for (int o = 0; o < MT_O8; o++) {
+		__m128i h = _mm256_cvtps_ph(_mm256_loadu_ps(src + 8 * o), _MM_FROUND_TO_NEAREST_INT);
+		_mm_storeu_si128((__m128i *)(dst + 8 * o), h);
+	}
+}
+
+#ifdef BC_CPU_TURBO_CHECK
+__attribute__((target("avx2,fma,f16c")))
+static void mt_load_f16_x86(float *dst, const uint16_t *src) {
+	for (int o = 0; o < MT_O8; o++)
+		_mm256_storeu_ps(dst + 8 * o, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(src + 8 * o))));
+}
+#endif
+#endif
+
+static int mt_sme_available(void) {
+	return mn_sme_available("hw.optional.arm.SME_F16F32");
+}
+
+#if (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
+static int mt_x86_f16c_available(void) {
+	unsigned a, b, c, d;
+	return __get_cpuid(1, &a, &b, &c, &d) && (c & (1u << 29)) != 0;
+}
 #endif
 
 /* The fast kernel this CPU runs (its name), or NULL: turbo then runs the
-   exact engine. */
-static const char *mt_select(mt_block_fn *block2, mt_block_fn *block1) {
+   exact engine. When block2/block1 are NULL and non-NULL name is returned,
+   mt_mode_select() picks the fp16 SIMD path (x86 AVX-512F/AVX2+F16C). */
+static const char *mt_select_ex(mt_block_fn *block2, mt_block_fn *block1, int *mode_out) {
+	if (mode_out) *mode_out = MT_MODE_INT8;
+	if (block2) *block2 = NULL;
+	if (block1) *block1 = NULL;
 #if defined(__aarch64__)
 	int i8mm = 0, dotprod = 0;
 #if defined(__APPLE__)
@@ -337,28 +500,49 @@ static const char *mt_select(mt_block_fn *block2, mt_block_fn *block1) {
 	i8mm = (getauxval(AT_HWCAP2) & HWCAP2_I8MM) != 0;
 	dotprod = (getauxval(AT_HWCAP) & HWCAP_ASIMDDP) != 0;
 #endif
-	if (i8mm) { *block2 = mt_neon_block2; *block1 = mt_neon_block1; return "i8mm"; }
-	if (dotprod) { *block2 = mt_sdot_block2; *block1 = mt_sdot_block1; return "sdot"; }
+	if (i8mm) {
+		if (block2) *block2 = mt_neon_block2;
+		if (block1) *block1 = mt_neon_block1;
+		return "i8mm";
+	}
+	if (dotprod) {
+		if (block2) *block2 = mt_sdot_block2;
+		if (block1) *block1 = mt_sdot_block1;
+		return "sdot";
+	}
 #elif (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__))
 	if (__builtin_cpu_supports("avx512vnni") && __builtin_cpu_supports("avx512vl")) {
-		*block2 = mt_vnni512_block2; *block1 = mt_vnni512_block1; return "avx512vnni";
+		if (block2) *block2 = mt_vnni512_block2;
+		if (block1) *block1 = mt_vnni512_block1;
+		return "avx512vnni";
 	}
-	/* Clang < 19 lacks the "avxvnni" builtin string: CPUID.(7,1):EAX[4].
-	   The AVX2 test covers the OS's YMM state. */
 	unsigned a, b, c, d;
 	if (__builtin_cpu_supports("avx2") && __get_cpuid_count(7, 1, &a, &b, &c, &d) && (a & (1u << 4))) {
-		*block2 = mt_avxvnni_block2; *block1 = mt_avxvnni_block1; return "avxvnni";
+		if (block2) *block2 = mt_avxvnni_block2;
+		if (block1) *block1 = mt_avxvnni_block1;
+		return "avxvnni";
 	}
-	if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) {
-		*block2 = mt_avx2_block2; *block1 = mt_avx2_block1; return "avx2";
+#if MN_CS == 24
+	if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx2") &&
+			__builtin_cpu_supports("fma") && mt_x86_f16c_available()) {
+		if (mode_out) *mode_out = MT_MODE_X86_F16_AVX512;
+		if (block2) *block2 = mt_avx2_block2;
+		if (block1) *block1 = mt_avx2_block1;
+		return "avx512f";
 	}
 #endif
-	(void)block2; (void)block1;
+	if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) {
+		if (mt_x86_f16c_available() && mode_out) *mode_out = MT_MODE_X86_F16_AVX2;
+		if (block2) *block2 = mt_avx2_block2;
+		if (block1) *block1 = mt_avx2_block1;
+		return "avx2";
+	}
+#endif
 	return NULL;
 }
 
-static int mt_sme_available(void) {
-	return mn_sme_available("hw.optional.arm.SME_F16F32");
+static inline const char *mt_select(mt_block_fn *block2, mt_block_fn *block1) {
+	return mt_select_ex(block2, block1, NULL);
 }
 
 #if MN_SME
@@ -413,7 +597,6 @@ static void mt_sme_segment(const uint8_t *src, int x0, int x1, const ptrdiff_t *
 
 static void mt_prepare_sme(const float *kernel, int8_t *packed) {
 	float16_t *w = (float16_t *)packed;
-	/* Same byte count as hi/lo s8 weights; padded channels remain calloc zeros. */
 	for (int t = 0; t < 27; t++)
 		for (int ic = 0; ic < BC_MODEL_CHAN; ic++)
 			for (int oc = 0; oc < MN_CS; oc++)
@@ -436,8 +619,6 @@ static void mt_prepare_sme(const float *kernel, int8_t *packed) {
 		(range)[(size_t)(bin) * 2 * MN_CS + MN_CS + c] = high[c]; \
 	}
 
-/* Quantize one L1-resident row [256][CS] into 64-voxel u8 blocks + [min,scale],
-   while accumulating weighted GroupNorm moments and global [low,high]. */
 static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float rw,
 		uint8_t *restrict y8, float *restrict ymom,
 		double *sum, double *square, float *low, float *high) {
@@ -583,8 +764,8 @@ static void mt_conv0_bins(void *context, int bin_low, int bin_high) {
 /* ----------------------------------------------------- hidden convolutions */
 
 static void mt_conv_row_compute(const uint8_t *source, int z, int y, int d,
-		const int8_t *weights, const int32_t *tap_sum, const float *scale,
-		mt_block_fn block2, mt_block_fn block1, int sme, float *dst_row) {
+		const int8_t *weights, const float *fweights, const int32_t *tap_sum,
+		const float *scale, mt_block_fn block2, mt_block_fn block1, int mode, float *dst_row) {
 	ptrdiff_t row_offset[9];
 	int row_tap[9], rows = 0;
 	for (int tz = 0; tz < 3; tz++) {
@@ -601,24 +782,43 @@ static void mt_conv_row_compute(const uint8_t *source, int z, int y, int d,
 	for (int segment = 0; segment < 3; segment++) {
 		ptrdiff_t tap_voxel[27];
 		const int8_t *tap_w[27];
+		const float *tap_wf[27];
 		int32_t corr[2 * MN_CS] = { 0 };
 		int ntap = 0;
 		for (int r = 0; r < rows; r++)
 			for (int tx = segment == 0; tx <= 2 - (segment == 2); tx++) {
 				int tap = row_tap[r] + tx;
 				tap_voxel[ntap] = row_offset[r] + (tx - 1) * d;
-				tap_w[ntap++] = weights + (size_t)tap * MT_TAP;
-				if (!sme) /* SME has no zero points */
+				if (mode == MT_MODE_INT8 || mode == MT_MODE_SME)
+					tap_w[ntap] = weights + (size_t)tap * MT_TAP;
+				else
+					tap_wf[ntap] = fweights + (size_t)tap * BC_MODEL_CHAN * MN_CS;
+				ntap++;
+				if (mode == MT_MODE_INT8)
 					for (int k = 0; k < 2 * MN_CS; k++) corr[k] += tap_sum[tap * 2 * MN_CS + k];
 			}
 #if MN_SME
-		if (sme) {
+		if (mode == MT_MODE_SME) {
 			mt_sme_segment(source, segment_x[segment], segment_x[segment + 1],
 				tap_voxel, tap_w, ntap, dst_row);
 			continue;
 		}
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+#if MN_CS == 24 || defined(BC_CPU_TURBO_CHECK)
+		if (mode == MT_MODE_X86_F16_AVX512) {
+			mt_f16_avx512_segment(source, segment_x[segment], segment_x[segment + 1],
+				tap_voxel, tap_wf, ntap, dst_row);
+			continue;
+		}
+#endif
+		if (mode == MT_MODE_X86_F16_AVX2) {
+			mt_f16_avx2_segment(source, segment_x[segment], segment_x[segment + 1],
+				tap_voxel, tap_wf, ntap, dst_row);
+			continue;
+		}
 #else
-		(void)sme;
+		(void)fweights; (void)tap_wf;
 #endif
 		int x = segment_x[segment];
 		for (; x + 2 <= segment_x[segment + 1]; x += 2)
@@ -633,6 +833,7 @@ typedef struct {
 	uint8_t *y8;
 	float *ymom;
 	const int8_t *weights;   /* int8 planes, or SME fp16 [tap][ic/2][oc][2] */
+	const float *fweights;   /* float [tap][BC_MODEL_CHAN][MN_CS] for x86 fp16 */
 	const int32_t *tap_sum;  /* [tap][hi oc, lo oc]: MT_ZP * sum of the tap's weights */
 	const float *scale;      /* [hi oc, lo oc] */
 	mt_block_fn block2, block1;
@@ -642,7 +843,7 @@ typedef struct {
 	uint32_t list_off, count;
 	double *partial;
 	float *range;
-	int sme;
+	int mode;
 } mt_conv_slab;
 
 static void mt_conv_bins(void *context, int bin_low, int bin_high) {
@@ -655,7 +856,8 @@ static void mt_conv_bins(void *context, int bin_low, int bin_high) {
 		for (uint32_t idx = i0; idx < i1; idx++) {
 			uint32_t row = s->list[s->list_off + idx];
 			mt_conv_row_compute(s->source, (int)(row >> 8), (int)(row & 255), s->dilation,
-				s->weights, s->tap_sum, s->scale, s->block2, s->block1, s->sme, row_buf);
+				s->weights, s->fweights, s->tap_sum, s->scale, s->block2, s->block1,
+				s->mode, row_buf);
 			mt_row_epilogue(row_buf, row, s->rw[s->list_off + idx], s->y8, s->ymom,
 				sum, square, low, high);
 		}
@@ -664,8 +866,6 @@ static void mt_conv_bins(void *context, int bin_low, int bin_high) {
 }
 _Static_assert(MN_DIM > 2 * 31, "x segments assume every dilation is under DIM/2");
 
-/* Next layer's weights: float kernel times its input's qs, split per output
-   channel into hi (+-127) and lo (+-64, the hi residual in 1/128 steps). */
 static void mt_prepare(const float *kernel, const float *qs, int8_t *wq, int32_t *tap_sum,
 		float *scale) {
 	for (int oc = 0; oc < MN_CS; oc++) {
@@ -676,7 +876,6 @@ static void mt_prepare(const float *kernel, const float *qs, int8_t *wq, int32_t
 		scale[oc] = peak > 0.0f ? peak / 127.0f : 1.0f;
 		scale[MN_CS + oc] = scale[oc] / 128.0f;
 	}
-	/* Pad input channels stay zero from the calloc in mt_infer. */
 	for (int tap = 0; tap < 27; tap++)
 		for (int oc = 0; oc < MN_CS; oc++) {
 			int32_t sum_hi = 0, sum_lo = 0;
@@ -746,6 +945,44 @@ static void mt_quant_y8_bins(void *context, int bin_low, int bin_high) {
 		}
 	}
 }
+
+#if defined(__x86_64__) || defined(_M_X64)
+static void mt_quant_f16_x86_y8_bins(void *context, int bin_low, int bin_high) {
+	const mt_quant_y8_slab *s = (const mt_quant_y8_slab *)context;
+	const uint8_t *restrict y8 = s->y8;
+	const float *restrict ymom = s->ymom;
+	uint16_t *restrict codes = (uint16_t *)s->codes;
+	const float *restrict mul = s->mul, *restrict add = s->add;
+	for (int bin = bin_low; bin <= bin_high; bin++) {
+		uint32_t i0 = (uint32_t)(((size_t)bin * s->count) / MT_STAT_BINS);
+		uint32_t i1 = (uint32_t)(((size_t)(bin + 1) * s->count) / MT_STAT_BINS);
+		for (uint32_t idx = i0; idx < i1; idx++) {
+			uint32_t row = s->list[s->list_off + idx];
+			const uint8_t *src_row = y8 + (size_t)row * MN_DIM * MN_CS;
+			const float *mom_row = ymom + (size_t)row * MT_YBLKS_PER_ROW * 2 * MN_CS;
+			uint16_t *dst_row = codes + (size_t)row * MN_DIM * MN_CS;
+			for (int b = 0; b < MT_YBLKS_PER_ROW; b++) {
+				const float *bmin = mom_row + (size_t)b * 2 * MN_CS;
+				const float *bscale = bmin + MN_CS;
+				float bmul[MN_CS], badd[MN_CS];
+				for (int c = 0; c < MN_CS; c++) {
+					bmul[c] = bscale[c] * mul[c];
+					badd[c] = bmin[c] * mul[c] + add[c];
+				}
+				const uint8_t *src_blk = src_row + (size_t)b * MT_YBLK * MN_CS;
+				uint16_t *dst_blk = dst_row + (size_t)b * MT_YBLK * MN_CS;
+				for (int v = 0; v < MT_YBLK; v++) {
+					const uint8_t *sv = src_blk + v * MN_CS;
+					float g[MN_CS];
+					for (int c = 0; c < MN_CS; c++)
+						g[c] = mn_gelu((float)sv[c] * bmul[c] + badd[c]);
+					mt_store_f16_x86(dst_blk + v * MN_CS, g);
+				}
+			}
+		}
+	}
+}
+#endif
 
 #if MN_SME
 static void mt_quant_sme_y8_bins(void *context, int bin_low, int bin_high) {
@@ -839,21 +1076,25 @@ static void mt_fold_stats(const double *partial, const float *range,
 
 static void mt_norm_quant_y8(const uint8_t *y8, const float *ymom, uint8_t *codes,
 		const double *partial, const float *range, const meshnet_cpu_plan *plan, int layer,
-		const bc_tc_plan *tc, float *qs, int sme) {
+		const bc_tc_plan *tc, float *qs, int mode) {
 	float mul[MN_CS], add[MN_CS], inv_qs[MN_CS];
-	mt_fold_stats(partial, range, plan, layer, mul, add, qs, inv_qs);
+	mt_fold_stats(partial, range, plan, layer, mul, add,
+		mode == MT_MODE_INT8 ? qs : NULL, mode == MT_MODE_INT8 ? inv_qs : NULL);
 	const bc_tc_layer *t = &tc->layer[layer];
 	mt_quant_y8_slab quant = { y8, ymom, codes, mul, add, inv_qs, tc->list, t->list_off, t->count };
 #if MN_SME
-	if (sme)
+	if (mode == MT_MODE_SME)
 		bc_parallel_for(0, MT_STAT_BINS - 1, 1, mt_quant_sme_y8_bins, &quant);
 	else
-#else
-	(void)sme;
+#endif
+#if defined(__x86_64__) || defined(_M_X64)
+	if (mode == MT_MODE_X86_F16_AVX512 || mode == MT_MODE_X86_F16_AVX2)
+		bc_parallel_for(0, MT_STAT_BINS - 1, 1, mt_quant_f16_x86_y8_bins, &quant);
+	else
 #endif
 		bc_parallel_for(0, MT_STAT_BINS - 1, 1, mt_quant_y8_bins, &quant);
 	if (t->npure) {
-		/* Both int8 (2*CS u8/vox) and SME (CS fp16/vox) use MN_DIM * MT_AS bytes per row. */
+		/* All formats (int8 hi+lo, SME fp16, x86 fp16) use MN_DIM * MT_AS bytes/row. */
 		mt_fill_rows_ctx fill = { codes, (size_t)MN_DIM * MT_AS, tc->list, t->pure_off, t->npure, t->rep };
 		bc_parallel_for(0, (int)t->npure - 1, 0, mt_fill_rows, &fill);
 	}
@@ -931,17 +1172,19 @@ static void mt_classify_y8_bins(void *context, int bin_low, int bin_high) {
 /* ---------------------------------------------------------------- the run */
 
 static int mt_infer(const unsigned char *conformed, float *labels, const meshnet_cpu_plan *plan,
-		mt_block_fn block2, mt_block_fn block1, const char *kernel) {
-	const int sme = mt_sme_available();
-	printfx("%s: CPU turbo (%s, %s)\n", BC_MODEL_NAME, sme ? "fp16" : "int8", sme ? "SME" : kernel);
+		mt_block_fn block2, mt_block_fn block1, const char *kernel, int mode) {
+	if (mt_sme_available()) mode = MT_MODE_SME;
+	const int is_fp16 = mode != MT_MODE_INT8;
+	printfx("%s: CPU turbo (%s, %s)\n", BC_MODEL_NAME,
+		is_fp16 ? "fp16" : "int8", mode == MT_MODE_SME ? "SME" : kernel);
 	bc_tc_plan tc;
-	if (bc_tc_make(conformed, plan->dilation, &tc)) return 1;
+	/* Exact pure-background skip (allow_cone=0) keeps CPU turbo >= 0.998 Dice
+	   without exterior-lattice variance drift. */
+	if (bc_tc_make_ex(conformed, plan->dilation, &tc, 0)) return 1;
 	mn_region region;
 	mn_make_region(NULL, &region);
-	/* Compact y8 + 64-voxel block moments replace the 1.61 GB float y buffer. */
 	uint8_t *y8 = (uint8_t *)malloc(MN_NVOX * MN_CS);
 	float *ymom = (float *)malloc(MT_YBLK_TOTAL * 2 * MN_CS * sizeof(*ymom));
-	/* The codes buffer first holds the normalized fp32 input (CS >= 4 bytes). */
 	uint8_t *codes = (uint8_t *)malloc(MN_NVOX * MT_AS + MT_ACT_PAD);
 	double *partial = (double *)malloc((size_t)MT_STAT_BINS * 2 * MN_CS * sizeof(*partial));
 	float *range = (float *)malloc((size_t)MT_STAT_BINS * 2 * MN_CS * sizeof(*range));
@@ -964,20 +1207,21 @@ static int mt_infer(const unsigned char *conformed, float *labels, const meshnet
 			tc.list, tc.weight, t0->list_off, t0->count, partial, range };
 		bc_parallel_for(0, MT_STAT_BINS - 1, 1, mt_conv0_bins, &conv0);
 	}
-	mt_norm_quant_y8(y8, ymom, codes, partial, range, plan, 0, &tc, qs, sme);
+	mt_norm_quant_y8(y8, ymom, codes, partial, range, plan, 0, &tc, qs, mode);
 	for (int layer = 1; layer < plan->layer_count; layer++) {
 #if MN_SME
-		if (sme) mt_prepare_sme(plan->kernel[layer], wq);
+		if (mode == MT_MODE_SME) mt_prepare_sme(plan->kernel[layer], wq);
 		else
 #endif
+		if (mode == MT_MODE_INT8)
 			mt_prepare(plan->kernel[layer], qs, wq, tap_sum, scale);
 		const bc_tc_layer *tl = &tc.layer[layer];
-		mt_conv_slab conv = { codes, y8, ymom, wq, tap_sum, scale, block2, block1,
-			plan->dilation[layer], tc.list, tc.weight, tl->list_off, tl->count,
-			partial, range, sme };
+		mt_conv_slab conv = { codes, y8, ymom, wq, plan->kernel[layer], tap_sum, scale,
+			block2, block1, plan->dilation[layer], tc.list, tc.weight, tl->list_off, tl->count,
+			partial, range, mode };
 		bc_parallel_for(0, MT_STAT_BINS - 1, 1, mt_conv_bins, &conv);
 		if (layer + 1 < plan->layer_count)
-			mt_norm_quant_y8(y8, ymom, codes, partial, range, plan, layer, &tc, qs, sme);
+			mt_norm_quant_y8(y8, ymom, codes, partial, range, plan, layer, &tc, qs, mode);
 	}
 	const int last = plan->layer_count - 1;
 	float mul[MN_CS], add[MN_CS];

@@ -1072,10 +1072,10 @@ static int bwlabel_cleanup_hierarchical(float *img, const size_t dim[3],
 							uint8_t k;
 							if (x > 0 && (k = comp_kept[mrow[x - 1]])) vrow[k]++;
 							if (x + 1 < nx && (k = comp_kept[mrow[x + 1]])) vrow[k]++;
-							if (y > 0 && (k = comp_kept[mrow[x - nx]])) vrow[k]++;
-							if (y + 1 < ny && (k = comp_kept[mrow[x + nx]])) vrow[k]++;
-							if (z > 0 && (k = comp_kept[mrow[x - xy]])) vrow[k]++;
-							if (z + 1 < nz && (k = comp_kept[mrow[x + xy]])) vrow[k]++;
+							if (y > 0 && (k = comp_kept[(mrow - nx)[x]])) vrow[k]++;
+							if (y + 1 < ny && (k = comp_kept[(mrow + nx)[x]])) vrow[k]++;
+							if (z > 0 && (k = comp_kept[(mrow - xy)[x]])) vrow[k]++;
+							if (z + 1 < nz && (k = comp_kept[(mrow + xy)[x]])) vrow[k]++;
 						}
 					}
 				}

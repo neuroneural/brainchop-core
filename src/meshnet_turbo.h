@@ -547,49 +547,54 @@ static inline const char *mt_select(mt_block_fn *block2, mt_block_fn *block1) {
 
 #if MN_SME
 /* 512-bit SME: 32 voxels, fp16 operands, fp32 sums. Channel pairs are
-   contiguous across x so each matrix operand loads without a gather. */
+   contiguous across x so each matrix operand loads without a gather.
+   Off-row x taps are zeroed by load predicates rather than split into edge
+   segments, whose partial blocks cost full fmopa slots. */
 __attribute__((target("sme"))) __arm_locally_streaming __arm_new("za")
-static void mt_sme_segment(const uint8_t *src, int x0, int x1, const ptrdiff_t *tap_voxel,
-		const int8_t *const *tap_w, int ntap, float *out) {
+static void mt_sme_row(const uint8_t *src, const ptrdiff_t *row_offset, const int *row_tap, int rows,
+		int d, const int8_t *weights, float *out) {
 	svbool_t all = svptrue_b16(), floats = svptrue_b32();
 #if MN_CS == 24
 	svbool_t tail = svwhilelt_b16((uint64_t)0, (uint64_t)16);
 	svbool_t ftail = svwhilelt_b32((uint64_t)0, (uint64_t)8);
 #endif
-	for (int x = x0; x < x1; x += 32) {
-		int n = x1 - x < 32 ? x1 - x : 32;
-		int second = n > 16 ? 32 : 0; /* Keep even inactive load addresses in bounds. */
-		svbool_t p0 = svwhilelt_b16((uint64_t)0, (uint64_t)(n < 16 ? n : 16) * 2);
-		svbool_t p1 = svwhilelt_b16((uint64_t)0, (uint64_t)(n > 16 ? n - 16 : 0) * 2);
+	for (int x = 0; x < MN_DIM; x += 32) {
 		svzero_za();
-		for (int t = 0; t < ntap; t++) {
-			size_t v = (size_t)(tap_voxel[t] + x);
-			const float16_t *in = (const float16_t *)src
-				+ (v / MN_DIM) * MN_DIM * MN_CS + (v % MN_DIM) * 2;
-			const float16_t *tw = (const float16_t *)tap_w[t];
-			for (int g = 0; g < MN_CS / 2; g++) {
-				svfloat16_t a = svld1_f16(p0, in + g * MN_DIM * 2);
-				svfloat16_t b = svld1_f16(p1, in + g * MN_DIM * 2 + second);
-				svfloat16_t w = svld1_f16(all, tw + g * MN_CS * 2);
-				svmopa_za32_f16_m(0, p0, all, a, w);
-				svmopa_za32_f16_m(2, p1, all, b, w);
+		for (int r = 0; r < rows; r++) {
+			uintptr_t base = (uintptr_t)src + (uintptr_t)row_offset[r] * MN_CS * sizeof(float16_t);
+			for (int tx = 0; tx < 3; tx++) {
+				int xs = x + (tx - 1) * d; /* source x of lane 0 */
+				int lo = xs < 0 ? -xs : 0, hi = MN_DIM - xs; /* valid voxel lanes [lo, hi) */
+				if (hi <= 0 || lo >= 32) continue;
+				svbool_t p0 = all, p1 = all;
+				if (lo > 0 || hi < 32) {
+					p0 = svbic_z(all, svwhilelt_b16((int64_t)0, (int64_t)hi * 2),
+						svwhilelt_b16((int64_t)0, (int64_t)lo * 2));
+					p1 = svbic_z(all, svwhilelt_b16((int64_t)0, (int64_t)(hi - 16) * 2),
+						svwhilelt_b16((int64_t)0, (int64_t)(lo - 16) * 2));
+				}
+				const float16_t *in = (const float16_t *)(base + (uintptr_t)((intptr_t)xs * 2 * (intptr_t)sizeof(float16_t)));
+				const float16_t *tw = (const float16_t *)(weights + (size_t)(row_tap[r] + tx) * MT_TAP);
+				for (int g = 0; g < MN_CS / 2; g++) {
+					svfloat16_t a = svld1_f16(p0, in + g * MN_DIM * 2);
+					svfloat16_t b = svld1_f16(p1, in + g * MN_DIM * 2 + 32);
+					svfloat16_t w = svld1_f16(all, tw + g * MN_CS * 2);
+					svmopa_za32_f16_m(0, all, all, a, w);
+					svmopa_za32_f16_m(2, all, all, b, w);
 #if MN_CS == 24
-				w = svld1_f16(tail, tw + g * MN_CS * 2 + 32);
-				svmopa_za32_f16_m(1, p0, tail, a, w);
-				svmopa_za32_f16_m(3, p1, tail, b, w);
+					w = svld1_f16(tail, tw + g * MN_CS * 2 + 32);
+					svmopa_za32_f16_m(1, all, tail, a, w);
+					svmopa_za32_f16_m(3, all, tail, b, w);
 #endif
+				}
 			}
 		}
-		for (int b = 0; b < (n < 16 ? n : 16); b++) {
+		for (int b = 0; b < 16; b++) {
 			svst1_hor_za32(0, b, floats, out + (x + b) * MN_CS);
+			svst1_hor_za32(2, b, floats, out + (x + 16 + b) * MN_CS);
 #if MN_CS == 24
 			svst1_hor_za32(1, b, ftail, out + (x + b) * MN_CS + 16);
-#endif
-		}
-		for (int b = 16; b < n; b++) {
-			svst1_hor_za32(2, b - 16, floats, out + (x + b) * MN_CS);
-#if MN_CS == 24
-			svst1_hor_za32(3, b - 16, ftail, out + (x + b) * MN_CS + 16);
+			svst1_hor_za32(3, b, ftail, out + (x + 16 + b) * MN_CS + 16);
 #endif
 		}
 	}
@@ -619,6 +624,70 @@ static void mt_prepare_sme(const float *kernel, int8_t *packed) {
 		(range)[(size_t)(bin) * 2 * MN_CS + MN_CS + c] = high[c]; \
 	}
 
+#if defined(__aarch64__)
+/* Float block sums (64 voxels) promoted to double once per block. */
+static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float rw,
+		uint8_t *restrict y8, float *restrict ymom,
+		double *sum, double *square, float *low, float *high) {
+	enum { G = MN_CS / 4 };
+	uint8_t *dst_row = y8 + (size_t)row * MN_DIM * MN_CS;
+	float *mom_row = ymom + (size_t)row * MT_YBLKS_PER_ROW * 2 * MN_CS;
+	for (int b = 0; b < MT_YBLKS_PER_ROW; b++) {
+		const float *blk_in = row_buf + (size_t)b * MT_YBLK * MN_CS;
+		uint8_t *blk_out = dst_row + (size_t)b * MT_YBLK * MN_CS;
+		float *bmin = mom_row + (size_t)b * 2 * MN_CS;
+		float *bscale = bmin + MN_CS;
+		float32x4_t s[G], q[G], mn[G], mx[G];
+		for (int g = 0; g < G; g++) {
+			s[g] = q[g] = vdupq_n_f32(0.0f);
+			mn[g] = vdupq_n_f32(FLT_MAX);
+			mx[g] = vdupq_n_f32(-FLT_MAX);
+		}
+		for (int v = 0; v < MT_YBLK; v++)
+			for (int g = 0; g < G; g++) {
+				float32x4_t x = vld1q_f32(blk_in + v * MN_CS + 4 * g);
+				s[g] = vaddq_f32(s[g], x);
+				q[g] = vfmaq_f32(q[g], x, x);
+				mn[g] = vminnmq_f32(mn[g], x);
+				mx[g] = vmaxnmq_f32(mx[g], x);
+			}
+		float32x4_t inv4[G];
+		for (int g = 0; g < G; g++) {
+			vst1q_f32(bmin + 4 * g, mn[g]);
+			float32x4_t span = vsubq_f32(mx[g], mn[g]);
+			uint32x4_t live = vcgtq_f32(span, vdupq_n_f32(1e-30f));
+			vst1q_f32(bscale + 4 * g, vreinterpretq_f32_u32(vandq_u32(live,
+				vreinterpretq_u32_f32(vmulq_n_f32(span, 1.0f / 255.0f)))));
+			inv4[g] = vreinterpretq_f32_u32(vandq_u32(live,
+				vreinterpretq_u32_f32(vdivq_f32(vdupq_n_f32(255.0f), span))));
+			float bs[4], bq[4], bl[4], bh[4];
+			vst1q_f32(bs, s[g]); vst1q_f32(bq, q[g]); vst1q_f32(bl, mn[g]); vst1q_f32(bh, mx[g]);
+			for (int k = 0; k < 4; k++) {
+				int c = 4 * g + k;
+				if (rw > 0.0f) {
+					sum[c] += (double)rw * bs[k];
+					square[c] += (double)rw * bq[k];
+				}
+				if (bl[k] < low[c]) low[c] = bl[k];
+				if (bh[k] > high[c]) high[c] = bh[k];
+			}
+		}
+		const float32x4_t half = vdupq_n_f32(0.5f);
+		const uint32x4_t top = vdupq_n_u32(255);
+		for (int v = 0; v < MT_YBLK; v++) {
+			uint16x4_t h[G];
+			for (int g = 0; g < G; g++) {
+				float32x4_t x = vld1q_f32(blk_in + v * MN_CS + 4 * g);
+				uint32x4_t qi = vcvtq_u32_f32(vfmaq_f32(half, vsubq_f32(x, mn[g]), inv4[g]));
+				h[g] = vmovn_u32(vminq_u32(qi, top));
+			}
+			uint8_t *o = blk_out + v * MN_CS;
+			for (int g = 0; g < G; g += 2)
+				vst1_u8(o + 4 * g, vmovn_u16(vcombine_u16(h[g], h[g + 1])));
+		}
+	}
+}
+#else
 static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float rw,
 		uint8_t *restrict y8, float *restrict ymom,
 		double *sum, double *square, float *low, float *high) {
@@ -671,6 +740,7 @@ static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float r
 		}
 	}
 }
+#endif
 
 /* ----------------------------------------------------- layer-0 convolution */
 
@@ -778,6 +848,12 @@ static void mt_conv_row_compute(const uint8_t *source, int z, int y, int d,
 			row_tap[rows++] = (tz * 3 + ty) * 3;
 		}
 	}
+#if MN_SME
+	if (mode == MT_MODE_SME) {
+		mt_sme_row(source, row_offset, row_tap, rows, d, weights, dst_row);
+		return;
+	}
+#endif
 	const int segment_x[4] = { 0, d, MN_DIM - d, MN_DIM };
 	for (int segment = 0; segment < 3; segment++) {
 		ptrdiff_t tap_voxel[27];
@@ -797,13 +873,6 @@ static void mt_conv_row_compute(const uint8_t *source, int z, int y, int d,
 				if (mode == MT_MODE_INT8)
 					for (int k = 0; k < 2 * MN_CS; k++) corr[k] += tap_sum[tap * 2 * MN_CS + k];
 			}
-#if MN_SME
-		if (mode == MT_MODE_SME) {
-			mt_sme_segment(source, segment_x[segment], segment_x[segment + 1],
-				tap_voxel, tap_w, ntap, dst_row);
-			continue;
-		}
-#endif
 #if defined(__x86_64__) || defined(_M_X64)
 #if MN_CS == 24 || defined(BC_CPU_TURBO_CHECK)
 		if (mode == MT_MODE_X86_F16_AVX512) {

@@ -75,6 +75,16 @@ await Promise.all([
   ...MODELS.flatMap((model) => entry(model, `worker-${model}`, [oneModel(model)])),
 ])
 
+// Guard the static worker expression host bundlers (Vite / Rollup / Webpack)
+// require in order to emit the worker chunk beside every entry point.
+for (const [name, worker] of [['index', 'worker'], ...MODELS.map((m) => [m, `worker-${m}`])]) {
+  const file = `dist/${name}.js`
+  const code = readFileSync(file, 'utf8')
+  const expected = `new Worker(new URL("./${worker}.js", import.meta.url), { type: "module" })`
+  if (!code.includes(expected))
+    throw new Error(`${file} missing bundler-visible static worker call: ${expected}`)
+}
+
 // Guard the point of the per-model entries: one stray import or model URL re-adds megabytes.
 for (const model of MODELS) {
   const canonical = canonicalOf(model)

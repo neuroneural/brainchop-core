@@ -819,6 +819,14 @@ test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persiste
   // 3. Persistent singleton worker reuse, timeout reset, disposeWorker(), and mindmap-fast PVE refusal
   const distIndex = join(repoRoot, 'js', 'dist', 'index.js')
   if (existsSync(distIndex)) {
+    // Host bundlers (Vite / Rollup / Webpack) only emit the module worker when
+    // `new URL("./worker*.js", import.meta.url)` is passed directly to `new Worker(...)`.
+    const distSource = readFileSync(distIndex, 'utf8')
+    assert.ok(
+      distSource.includes('new Worker(new URL("./worker.js", import.meta.url), { type: "module" })'),
+      'dist/index.js must emit a static new Worker(new URL("./worker.js", import.meta.url)) call for host bundlers',
+    )
+
     const mod = await import(`file://${distIndex}?v=${Date.now()}`)
     // mindmap-fast & 16chan18cls must be refused for segmentTissues (matching model_capabilities.json)
     for (const m of ['mindmap-fast', '16chan18cls', 'mindgrab', 'mindsnap']) {

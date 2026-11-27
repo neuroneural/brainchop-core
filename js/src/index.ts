@@ -239,11 +239,9 @@ async function runInWorker(
     throw new BrainchopError('unsupported-option',
       'this environment has no Worker; run with worker: false')
 
-  const workerEntryName = typeof __BC_WORKER__ === 'string' ? __BC_WORKER__ : './worker.js'
-  const workerUrl = options.assetPath
-    ? assetUrl(workerEntryName, options.assetPath)
-    : new URL(workerEntryName, import.meta.url)
-  const workerKey = typeof workerUrl === 'string' ? workerUrl : workerUrl.href
+  const workerKey = options.assetPath
+    ? `custom:${assetUrl(__BC_WORKER__, options.assetPath)}`
+    : 'bundled'
 
   const executeJob = async (): Promise<{
     image: ArrayBuffer; mask?: ArrayBuffer; tissues?: TissueMaps; elapsedMs: number; backend: Backend
@@ -252,7 +250,12 @@ async function runInWorker(
       terminateSingletonWorker()
     }
     if (!singletonWorker) {
-      const worker = new Worker(workerUrl, { type: 'module' })
+      // Keep `new Worker(new URL(__BC_WORKER__, import.meta.url), { type: 'module' })`
+      // as a direct expression so Vite / Rollup / Webpack statically detect and
+      // emit the worker bundle.
+      const worker = options.assetPath
+        ? new Worker(assetUrl(__BC_WORKER__, options.assetPath), { type: 'module' })
+        : new Worker(new URL(__BC_WORKER__, import.meta.url), { type: 'module' })
       singletonWorker = { key: workerKey, worker, idleTimer: null }
     }
     const entry = singletonWorker

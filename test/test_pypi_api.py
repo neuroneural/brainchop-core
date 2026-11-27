@@ -73,7 +73,7 @@ class BrainchopApiTests(unittest.TestCase):
                     "export", "optimize", "export_classes", "__version__"):
             self.assertTrue(hasattr(brainchop, sym), f"missing export {sym}")
         models = list_models()
-        self.assertEqual(set(models), {"mindgrab", "mindmap-fast", "mindmap", "mindsnap"})
+        self.assertEqual(set(models), {"mindgrab", "mindmap-fast", "mindmap", "mindmap-omni", "mindsnap"})
 
     def test_load_and_save_without_numpy(self):
         with patch.dict(sys.modules, {"numpy": None}):

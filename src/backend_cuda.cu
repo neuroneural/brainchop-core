@@ -1,7 +1,13 @@
 #include "backend.h"
 #include "backend_accel.h"
 #include "cuda_variants.h"
+#if defined(BC_MODEL_IS_MINDMAP_OMNI) && BC_MODEL_IS_MINDMAP_OMNI && !defined(BC_MODEL_IS_MINDMAP)
+#define BC_MODEL_IS_MINDMAP 1
 #include "cuda_kernels.cuh"
+#undef BC_MODEL_IS_MINDMAP
+#else
+#include "cuda_kernels.cuh"
+#endif
 #include "model_specs.h"
 
 #include <cuda_runtime.h>

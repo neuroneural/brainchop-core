@@ -18,7 +18,7 @@
   <a href="https://github.com/neuroneural/brainchop-core/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT" /></a>
 </p>
 
-Powered by four embedded 3D MeshNet models with **no PyTorch, TensorFlow, tinygrad, CUDA Toolkit, or Python ML stack required at runtime**.
+Powered by five embedded 3D MeshNet models with **no PyTorch, TensorFlow, tinygrad, CUDA Toolkit, or Python ML stack required at runtime**.
 
 - **Web App:** [brainchop.org](https://brainchop.org)
 - **Repository:** [github.com/neuroneural/brainchop-core](https://github.com/neuroneural/brainchop-core)
@@ -27,16 +27,17 @@ Powered by four embedded 3D MeshNet models with **no PyTorch, TensorFlow, tinygr
 
 ## Embedded Models & Model Cards
 
-All four models are compiled directly into self-contained binaries (no separate weight downloads or cache directories):
+All five models are compiled directly into self-contained binaries (no separate weight downloads or cache directories):
 
 | CLI / API name | Paper name | Executable | Params | Classes | Intended Input | Purpose & Notes |
 | --- | --- | --- | ---: | ---: | --- | --- |
 | `mindgrab` (`--skull-strip`) | MindGrab | `brainchop-mindgrab` | 145K | 2 | T1, T2, FLAIR, DWI, EPI, MRA, PDw, qT1, CT, PET | Modality-agnostic skull stripping & brain masking (`--mask`, `--border`, `--crop`) |
-| `mindmap` *(default)* | MindMap-24 | `brainchop-mindmap` | 188K | 18 | 3D T1w MRI | Primary cortical & subcortical segmentation; optional experimental GM/WM/CSF tissue fractions (`--pve`) |
+| `mindmap` *(default)* | MindMap-24 | `brainchop-mindmap` | 188K | 18 | 3D T1w MRI | Primary T1w cortical & subcortical segmentation; optional experimental GM/WM/CSF tissue fractions (`--pve`) |
+| `mindmap-omni` | MindMap-Omni | `brainchop-mindmap-omni` | 188K | 18 | T2w, FLAIR, T1w, PDw, T1ce, ULF 64 mT, FDG-PET | Contrast-agnostic 18-class segmentation for non-T1, multi-contrast, low-field, tilted, and lesioned scans |
 | `mindsnap` | MindSnap-104 | `brainchop-mindsnap` | 190K | 104 | 3D T1w MRI | Desikan-Killiany cortical + subcortical + 5-part corpus callosum parcellation |
 | `mindmap-fast` | MindMap-16 (v4.1) | `brainchop-mindmap-fast` | 84K | 18 | 3D T1w MRI | Fast lightweight 18-class cortical & subcortical segmentation (`16chan18cls` alias); atrophy-repaired and clinical-scan-hardened |
 
-*Training & label provenance:* `mindmap`, `mindsnap`, and `mindmap-fast` are trained on synthetic and T1w brain volumes supervised with FreeSurfer-convention anatomical parcellation labels; `mindgrab` is trained on multi-contrast synthetic and multi-modal neuroimaging volumes ([Fani et al., 2026](https://doi.org/10.1016/j.neuroimage.2026.122074)). The companion manuscript also evaluates a 50-class variant (`MindSnap-50`), omitted from this default runtime bundle to keep package footprints small.
+*Training & label provenance:* `mindmap`, `mindsnap`, and `mindmap-fast` are trained on synthetic and T1w brain volumes supervised with FreeSurfer-convention anatomical parcellation labels; `mindmap-omni` uses the exact same 24-channel 18-class MeshNet graph trained with contrast-agnostic multi-modal physics synthesis (T2w/FLAIR/PDw/T1ce/ULF/FDG-PET, thick slices, head tilts, MS WMH & chronic stroke lesions); `mindgrab` is trained on multi-contrast synthetic and multi-modal neuroimaging volumes ([Fani et al., 2026](https://doi.org/10.1016/j.neuroimage.2026.122074)). The companion manuscript also evaluates a 50-class variant (`MindSnap-50`), omitted from this default runtime bundle to keep package footprints small.
 
 ### Validation Summary & Known Limitations
 
@@ -59,6 +60,22 @@ Metrics below are from the locked evaluation ledger (`v4.0` release weights for 
 
 **Choosing between `mindmap` and `mindmap-fast`:** Both 18-class models are trained for clinical and dementia research cohorts. `mindmap-fast` (`v4.1`) delivers strong dementia morphometry (OASIS-3 AD vs CN `%TBVV` AUROC `0.830`, HarP AD vs CN AUROC `0.881`, Emory hippocampal Dice `0.810`), thick-slice robustness (`0.772` at 5 mm), and lower focal-lesion false positives on surgical resections (`40.0%` vs `46.1%`) and stroke (`58.7%` vs `74.7%`) than `mindmap` (`v4.0`) at ~1.3 GiB peak memory and 2.3 s on Apple M1 WebGPU. Choose `mindmap` (`v4.0`) when you need experimental `--pve` tissue fractions, finer sulcal detail, or higher HarP hippocampal asymmetry correlation (`r = 0.794` vs `0.640`).
 
+**Contrast-agnostic (`mindmap-omni`) external evaluation (424 scans across 8 cohorts, 8-bit WebGPU V4):**
+
+| External Cohort | `mindmap-omni` | `mindmap` *(T1w)* | SynthSeg-robust | SynthSeg 2.0 |
+| --- | ---: | ---: | ---: | ---: |
+| CERMEP Clinical FLAIR (`N=37`, `0rt`) | **0.905** | 0.659 | 0.888 | 0.904 |
+| CERMEP FDG-PET Zero-Shot (`N=37`, Dice / max neck leak) | **0.731** (**0.00 mL**) | 0.562 | 0.700 | 0.592 |
+| 64 mT Portable MRI (`N=23`, 2.34 mm / 5 mm) | **0.677 / 0.501** | 0.635 / 0.443 | 0.677 / 0.500 | 0.620 / 0.420 |
+| MS Clinical Shifts (`N=36`, FLAIR / T2w / PDw / T1ce) | 0.880 / 0.891 / 0.877 / 0.916 | 0.549 / 0.629 / 0.806 / 0.869 | — | 0.889 / 0.902 / 0.899 / 0.927 |
+| MS WMH→WM Preservation (FLAIR / T2w / T1w) | **87.6% / 81.6%** / 80.2% | 34.4% / 55.6% / 69.5% | — | 85.7% / 78.8% / 89.2% |
+| ARC Chronic Stroke T2w (`N=40`, lesion excluded ↑) | **24.7%** | 11.3% | 10.0% | 15.5% |
+| HCP 0.7 mm T2w (`N=20`, 16-class Dice / Ctx VolR) | 0.824 (**1.004**) | 0.780 | 0.827 (1.036) | **0.846** (1.028) |
+| Mindboggle Manual NMM (`N=20`, 16-class / sulcal F1) | 0.816 / **0.599** | **0.843** / 0.525 | 0.761 / 0.387 | 0.826 / 0.581 |
+| 65-Run Head Tilt Reliability (Tilt Dice / Vol Drift ↓) | **0.869 / 6.8%** | — | 0.838 / 14.5% | 0.826 / 18.1% |
+
+*Use `mindmap` (or `mindsnap` for 104-class parcellation) when inputs are known 3D T1w scans; use `mindmap-omni` for T2w, FLAIR, PDw, T1ce, ultra-low-field 64 mT, FDG-PET, heavily tilted, or mixed/unlabeled clinical archives.*
+
 **Known limitations:**
 - **Thick-slice clinical scans (5 mm):** `mindmap-fast` (`v4.1`) is trained with anisotropic clinical degradation and reaches `0.772` Shared-11 Dice on 5 mm acquisitions (`+5.75 pp` over legacy v3.5), narrowing most of the gap to SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`), whereas isotropic-trained `mindmap` / `mindsnap` (`v4.0`) score `0.729` at 5 mm.
 - **Sub-voxel grid shifts & large head tilts:** Inference runs directly on a single conformed 1 mm `256³` grid without affine registration or test-time augmentation, so sub-voxel padding/grid shifts or large head tilts can reduce boundary overlap compared to scan–rescan repeatability.
@@ -72,6 +89,7 @@ Every binary and npm asset in this repository is built directly from the verifie
 | --- | --- | --- | --- | --- |
 | `mindgrab` | MindGrab (NeuroImage 2026) | `c9a01490fe2d13acc1515fd019b69db176ebe6f40c9b84aeb77f25acbc2ee0f3` | `21bf4c811a4790fa2498a49f2aa9042f9108964111b54a006fde1194b0e0e7b9` | — |
 | `mindmap` | MindMap-24 | `58006d1951212bf33695a8f4409823e872902a6e060b21e87d3fd65c1eb7c4e5` | `b86e11e7884061b81c2ac6d253c90933a3651e0accb7657b9c90f98afcee76ef` | `f6b60026daccabc689ff56bbadd5c1141a5645529f75eb998fe58426ac7f1b48` |
+| `mindmap-omni` | MindMap-Omni | `f284e2ece55f4a9ffc014bcf2e2923d17704888e5b2552171b4ea9dbd5bf5d2a` | `6bc132346972ec07dc9cd8f82ea3c317261c716fbfc39af0d7c3d217d6d81ded` | `0747a3219f77558418d3b67e7b1e07f7c206a0bd7591b286331d09fcf6bebfaa` |
 | `mindsnap` | MindSnap-104 | `995cdb522ba941b41ba7ab61d0484e8700f6c3d6084398ce28c6ce75d1ca2a1a` | `e485cac1ffc5bfc55a9cbca848d4fdae4a99a9f06cdec7e5d55e7801b9e44540` | `6b713d9d995bcce0ad5dd6c129f022aeb0241812f5acf64610f4a43ea6544bbc` |
 | `mindmap-fast` | MindMap-16 (v4.1) | `f6ea86f9836d60a08b04b358ef5bc278c2f5f204f33fa12295e550333cf0afb3` | `cfc06473c083108de1df8b0d9f5ab2993753efeb4e90f1684060cbda64420591` | `a255782088a5843b8ae10433fb8d487dd36774f852e2427bb7c86b560d1a054c` |
 
@@ -104,7 +122,7 @@ Pure-JS WebGPU engine with automatic low-memory staging, plus WebGL2 and multi-t
 
 ### Standalone Native Binaries (Zero Python)
 
-Download signed macOS Apple Silicon `.pkg` installers (macOS 13.2+) or self-contained Linux / Windows archives from [GitHub Releases](https://github.com/neuroneural/brainchop-core/releases). Each archive includes the `brainchop` dispatcher plus all four standalone executables.
+Download signed macOS Apple Silicon `.pkg` installers (macOS 13.2+) or self-contained Linux / Windows archives from [GitHub Releases](https://github.com/neuroneural/brainchop-core/releases). Each archive includes the `brainchop` dispatcher plus all five standalone executables.
 
 ### Build from Source
 
@@ -112,15 +130,18 @@ Download signed macOS Apple Silicon `.pkg` installers (macOS 13.2+) or self-cont
 make -C src -j4
 ```
 
-Requires only a C11 compiler (`clang` or `gcc`) and system `zlib`. Builds all four model executables and the zero-dependency `brainchop` dispatcher.
+Requires only a C11 compiler (`clang` or `gcc`) and system `zlib`. Builds all five model executables and the zero-dependency `brainchop` dispatcher.
 
 ## Usage
 
 ### Command Line
 
 ```bash
-# Default 18-class cortical & subcortical segmentation (mindmap)
+# Default 18-class cortical & subcortical segmentation for 3D T1w (mindmap)
 brainchop input.nii.gz -o labels.nii.gz
+
+# Contrast-agnostic 18-class segmentation for T2w / FLAIR / PDw / ULF / FDG-PET (mindmap-omni)
+brainchop flair.nii.gz -m mindmap-omni -o labels_omni.nii.gz
 
 # 104-class Desikan-Killiany parcellation (mindsnap)
 brainchop input.nii.gz -m mindsnap -o parcels.nii.gz

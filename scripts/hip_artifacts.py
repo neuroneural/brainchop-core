@@ -40,6 +40,8 @@ def _legacy_evolved_source(name):
 # Checked-in gfx1151 bundles compiled with ROCm 7.2.2 against v1.0.0 prior
 # masks remain valid for label inference; backend_hip_driver.c gates --pve
 # on BC_HIP_PVE_REVISION until gfx1151 PVE support is rebuilt on ROCm.
+# Adding mindmap_omni (pve: false, sharing mindmap's 24ch/18cls kernels) to
+# model_capabilities.{json,h} does not alter any existing model's capability.
 _PRE_V111_PINNED_SOURCES = {
     "scripts/hip_artifacts.py":
         "325fc3973fbb4ea90fe5aa1ddcab31cdeee69e1f445d853b76c1af7bfbfff951",
@@ -47,6 +49,10 @@ _PRE_V111_PINNED_SOURCES = {
         "2bcbd8fceab885aba4b04cf0f61a4c878d6c5cab45422157af94e4e090d5ac4c",
     "scripts/hip_tissue_priors.hip":
         "7fad23fb52ac39de8b4cbf7c76f221d7bcbf2e0f175043559800f36119b59661",
+    "src/model_capabilities.json":
+        "792fea16fb62987621803f4f5313c4d0b7aef3788c708c974bd3c24afcbee81c",
+    "src/model_capabilities.h":
+        "5fd7ab1b4dc4ed9c208ff7a8808d34e23b9303567fc820cd3abe3865d38daa48",
 }
 
 

@@ -108,10 +108,12 @@ void bc_cli_help(FILE *stream, const char *program) {
 		pad, "", BC_BACKEND_CHOICES);
 
 	const char *public_name =
-		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" : BC_MODEL_NAME;
+		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" :
+		!strcmp(BC_MODEL_NAME, "mindmap_omni") ? "mindmap-omni" : BC_MODEL_NAME;
 	const char *public_desc =
 		!strcmp(BC_MODEL_NAME, "mindgrab") ? "skull stripping in any modality" :
 		!strcmp(BC_MODEL_NAME, "mindmap") ? "18-class cortical and subcortical segmentation" :
+		!strcmp(BC_MODEL_NAME, "mindmap_omni") ? "contrast-agnostic 18-class segmentation (T2w, FLAIR, T1w, ULF, PET)" :
 		!strcmp(BC_MODEL_NAME, "mindsnap") ? "104-class Desikan-Killiany parcellation" :
 		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "fast lightweight 18-class segmentation" :
 		BC_MODEL_DESCRIPTION;

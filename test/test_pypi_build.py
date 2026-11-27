@@ -24,6 +24,7 @@ class BuildTests(unittest.TestCase):
             self.assertIn('Version: '+build.VERSION,meta_bytes.decode('utf-8'))
             commands=(Path(temp)/name/'entry_points.txt').read_text(encoding='utf-8')
             self.assertIn('brainchop-mindmap-fast =',commands)
+            self.assertIn('brainchop-mindmap-omni =',commands)
             self.assertNotIn('brainchop-16chan18cls =',commands)
             self.assertEqual(build.get_requires_for_build_wheel(),[])
             self.assertEqual(build.get_requires_for_build_sdist(),[])
@@ -73,9 +74,10 @@ class BuildTests(unittest.TestCase):
             name=build.build_sdist(temp)
             with tarfile.open(Path(temp)/name) as tar:
                 names=tar.getnames()
+                self.assertTrue(any(n.endswith('/src/models/mindmap_omni/model.bin') for n in names))
                 self.assertTrue(any(n.endswith('/src/models/mindsnap/model.bin') for n in names))
                 self.assertFalse(any('.git/' in n or n.endswith(('.safetensors','.o','.exe','.pyc')) or '/test/' in n for n in names))
-                self.assertEqual(sum(n.endswith('/model.bin') for n in names),4)
+                self.assertEqual(sum(n.endswith('/model.bin') for n in names),5)
 
     def test_cuda_pruning_preserves_only_selected_native_images(self):
         for path in (build.ROOT/'src/cuda_modules').glob('*.fatbin'):

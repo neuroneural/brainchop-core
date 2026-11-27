@@ -8,7 +8,8 @@ The installer places the `brainchop` dispatcher and one executable per model in
 
   brainchop                unified CLI dispatcher (`brainchop -m <model> ...`, default: mindmap)
   brainchop-mindgrab       skull stripping in any modality
-  brainchop-mindmap        18-class cortical and subcortical segmentation
+  brainchop-mindmap        18-class cortical and subcortical segmentation (T1w)
+  brainchop-mindmap-omni   contrast-agnostic 18-class segmentation (T2w, FLAIR, T1w, ULF, PET)
   brainchop-mindsnap       104-class Desikan-Killiany parcellation
   brainchop-mindmap-fast   fast lightweight 18-class segmentation
 
@@ -44,4 +45,4 @@ To uninstall, delete the executables:
 
   sudo rm /usr/local/bin/brainchop /usr/local/bin/brainchop-mindgrab \
     /usr/local/bin/brainchop-mindmap-fast /usr/local/bin/brainchop-mindmap \
-    /usr/local/bin/brainchop-mindsnap
+    /usr/local/bin/brainchop-mindmap-omni /usr/local/bin/brainchop-mindsnap

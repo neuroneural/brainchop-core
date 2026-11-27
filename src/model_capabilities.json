@@ -8,6 +8,9 @@
   "mindmap": {
     "pve": true
   },
+  "mindmap_omni": {
+    "pve": false
+  },
   "mindsnap": {
     "pve": false
   }

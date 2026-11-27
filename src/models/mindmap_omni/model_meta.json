@@ -1,0 +1,28 @@
+{
+  "cli_name": "mindmap-omni",
+  "description": "contrast-agnostic 18-class brain segmentation (T2w, FLAIR, T1w, PDw, ULF, FDG-PET; 24-channel)",
+  "output_kind": "labels",
+  "c_prefix": "MINDMAP_OMNI",
+  "_comment_gelu": "Identical 24-channel 13-hidden affine-GN MeshNet architecture to mindmap, sharing the same exp2_sigmoid GELU, Metal shaders, CUDA fatbin, and HIP code objects with zero added kernel footprint.",
+  "gelu": "exp2_sigmoid",
+  "loader_transposes_kernel": false,
+  "classifier_bias": true,
+  "_comment_norm": "5/95 rank quantile normalization (floor(n*0.05), ceil(n*0.95)-1) matching mindmap and the locked v6.2 non-T1 training/evaluation pipeline.",
+  "norm": {
+    "q_low": 0.05,
+    "q_high": 0.95,
+    "denom_eps": 0.0,
+    "clamp": false,
+    "quantile_mode": "rank"
+  },
+  "_comment_capabilities": "Identical dilation ladder to mindmap (1,3,5,7,13,19,31,19,13,7,5,3,1); full-volume receptive field precludes --crop, and --mask/--border apply only to binary mask models.",
+  "capabilities": {
+    "crop": false,
+    "mask": false,
+    "border": false,
+    "save_conform": true,
+    "ct": true,
+    "comply": true,
+    "export_classes": true
+  }
+}

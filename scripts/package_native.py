@@ -33,9 +33,12 @@ def main():
         p.error('requires CUDA=driver OPENCL=0; use make native-package')
     suffix = '.exe' if windows else ''
     modules = json.loads((a.src / 'cuda_modules/manifest.json').read_text())
-    # Every model with a checked-in fatbin ships; model16's executable is brainchop-mindmap-fast.
+    # Every model with a checked-in fatbin ships; model16's executable is brainchop-mindmap-fast,
+    # and mindmap-omni shares mindmap's 24ch/18cls fatbin.
     model_exes = {'brainchop-' + ('mindmap-fast' if m == 'model16chan18cls' else m) + suffix: m
                   for m in modules['models']}
+    if 'mindmap' in modules['models']:
+        model_exes['brainchop-mindmap-omni' + suffix] = 'mindmap'
     if set(a.executables) != set(model_exes) or len(a.executables) != len(model_exes):
         p.error('package must contain one executable per CUDA module: ' + ', '.join(sorted(model_exes)))
     records = {}

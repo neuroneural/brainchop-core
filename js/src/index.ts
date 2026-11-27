@@ -89,6 +89,15 @@ export const MODELS: Record<ModelName, ModelInfo> = {
       ct: true, comply: true, saveConform: true, mask: false, border: false,
     },
   },
+  'mindmap-omni': {
+    name: 'mindmap-omni',
+    colormap: COLORMAPS['mindmap-omni'],
+    description: 'contrast-agnostic 18-class segmentation (T2w, FLAIR, T1w, ULF, PET)',
+    outputKind: 'labels',
+    capabilities: {
+      ct: true, comply: true, saveConform: true, mask: false, border: false,
+    },
+  },
   mindsnap: {
     name: 'mindsnap',
     colormap: COLORMAPS['mindsnap'],

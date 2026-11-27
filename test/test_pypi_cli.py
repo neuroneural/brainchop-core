@@ -46,10 +46,10 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_default_is_supported_embedded_model(self):
         self.assertEqual(self.args().model, 'mindmap')
-        self.assertEqual(set(native.NATIVE_MODELS), {'mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'})
+        self.assertEqual(set(native.NATIVE_MODELS), {'mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'})
 
     def test_default_and_conformed_output_spaces(self):
-        for model in ('mindmap-fast', 'mindmap', 'mindsnap'):
+        for model in ('mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'):
             default = native.command(self.args(), model, 'binary', self.source, 'out.nii.gz')
             inverse = native.command(self.args('--inverse-conform'), model, 'binary', self.source,
                                      'out.nii.gz')

@@ -159,7 +159,7 @@ jobs:
           make -C src -j4 ZSTD=0 models dispatcher
           STAGE="dist/brainchop-${VER}-macos-arm64"
           mkdir -p "$STAGE"
-          cp src/brainchop src/brainchop-mindgrab src/brainchop-mindmap-fast src/brainchop-mindmap src/brainchop-mindsnap "$STAGE/"
+          cp src/brainchop src/brainchop-mindgrab src/brainchop-mindmap-fast src/brainchop-mindmap src/brainchop-mindmap-omni src/brainchop-mindsnap "$STAGE/"
           cp LICENSE THIRD_PARTY_NOTICES.md packaging/README-macOS.txt "$STAGE/"
           tar -C dist -czf "${STAGE}.tar.gz" "$(basename "$STAGE")"
           (cd dist && shasum -a 256 "$(basename "$STAGE").tar.gz" > "$(basename "$STAGE").tar.gz.sha256")

@@ -51,6 +51,11 @@ export const DESCRIPTORS = {
     activation: 'gelu_tanh',
     fullVolume: true,
   },
+  'mindmap-omni': {
+    dilations: DEEP13,
+    activation: 'gelu_tanh',
+    fullVolume: true,
+  },
   mindsnap: {
     dilations: DEEP13,
     activation: 'gelu_tanh',

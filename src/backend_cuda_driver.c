@@ -4,7 +4,15 @@
 #include "backend.h"
 #include "backend_accel.h"
 #include "cuda_driver_min.h"
+/* mindmap_omni has the exact 24ch/18cls/13-hidden graph as mindmap and shares
+ * its compiled fatbin and catalog entry without duplicating GPU artifacts. */
+#if defined(BC_MODEL_IS_MINDMAP_OMNI) && BC_MODEL_IS_MINDMAP_OMNI && !defined(BC_MODEL_IS_MINDMAP)
+#define BC_MODEL_IS_MINDMAP 1
 #include "cuda_modules/catalog.h"
+#undef BC_MODEL_IS_MINDMAP
+#else
+#include "cuda_modules/catalog.h"
+#endif
 #include "cuda_variants.h"
 #include "f16.h"
 #include "model_specs.h"

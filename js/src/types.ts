@@ -1,5 +1,5 @@
 /** Canonical model identifiers. */
-export type CanonicalModelName = 'mindgrab' | 'mindmap-fast' | 'mindmap' | 'mindsnap'
+export type CanonicalModelName = 'mindgrab' | 'mindmap-fast' | 'mindmap' | 'mindmap-omni' | 'mindsnap'
 
 /**
  * The models this package ships. `'16chan18cls'` is a full backward-compatible

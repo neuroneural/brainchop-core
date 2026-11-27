@@ -38,7 +38,7 @@ const entry = (name, worker, plugins = []) => {
 
 /*
  * Per-model entry points (`@brainchop/core/mindgrab`, `/mindmap-fast`,
- * `/16chan18cls`, `/mindmap`, `/mindsnap`). A bundler emits every literal
+ * `/16chan18cls`, `/mindmap`, `/mindmap-omni`, `/mindsnap`). A bundler emits every literal
  * `import()` and `new URL()` it sees, so these filter `modules.js` to a single
  * model's `.bin` weight URL and WebGL2/CPU fallback glue.
  */

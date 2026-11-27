@@ -515,7 +515,8 @@ static float *load_model_weights(void) {
 static void format_provenance_descrip(char descrip[80],
 		const char *backend_name, int no_turbo, int is_pve) {
 	const char *model_name =
-		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" : BC_MODEL_NAME;
+		!strcmp(BC_MODEL_NAME, "model16chan18cls") ? "mindmap-fast" :
+		!strcmp(BC_MODEL_NAME, "mindmap_omni") ? "mindmap-omni" : BC_MODEL_NAME;
 	const char *bname = backend_name ? backend_name : "unknown";
 	const char *wsha = BC_MODEL_WEIGHTS_SHA8;
 	memset(descrip, 0, 80);
@@ -897,7 +898,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 		}
 	}
 	int cleanup_failed;
-#if defined(BC_MODEL_IS_MINDMAP) || defined(BC_MODEL_IS_MODEL16CHAN18CLS)
+#if defined(BC_MODEL_IS_MINDMAP) || defined(BC_MODEL_IS_MINDMAP_OMNI) || defined(BC_MODEL_IS_MODEL16CHAN18CLS)
 	cleanup_failed=cli->legacy_cleanup ? bwlabel_largest(result,dimensions,0,26) :
 		bwlabel_cleanup18(result,dimensions);
 #elif defined(BC_MODEL_IS_MINDSNAP)

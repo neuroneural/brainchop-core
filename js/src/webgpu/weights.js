@@ -96,6 +96,13 @@ export const MODEL_BIN_SPECS = {
     hasAffine: true,
     weightFloats: 195522,
   },
+  'mindmap-omni': {
+    chan: 24,
+    nhidden: 13,
+    nclass: 18,
+    hasAffine: true,
+    weightFloats: 195522,
+  },
   mindsnap: {
     chan: 24,
     nhidden: 13,
@@ -107,6 +114,7 @@ export const MODEL_BIN_SPECS = {
 
 function normalizeBinModelName(name) {
   if (name === '16chan18cls' || name === 'model16chan18cls') return 'mindmap-fast';
+  if (name === 'mindmap_omni') return 'mindmap-omni';
   return name;
 }
 

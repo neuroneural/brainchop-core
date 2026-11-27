@@ -8,6 +8,8 @@
 #define BC_MODEL_SUPPORTS_PVE 0
 #elif defined(BC_MODEL_IS_MINDMAP)
 #define BC_MODEL_SUPPORTS_PVE 1
+#elif defined(BC_MODEL_IS_MINDMAP_OMNI)
+#define BC_MODEL_SUPPORTS_PVE 0
 #elif defined(BC_MODEL_IS_MINDSNAP)
 #define BC_MODEL_SUPPORTS_PVE 0
 #else

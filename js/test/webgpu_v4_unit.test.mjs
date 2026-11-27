@@ -91,9 +91,9 @@ function flatToNested4x4(m) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. parseModelBin parity against model.safetensors for ALL 4 models
+// 1. parseModelBin parity against model.safetensors for ALL 5 models
 // ---------------------------------------------------------------------------
-test('parseModelBin matches model.safetensors tensor names, shapes, and values for all 4 models', () => {
+test('parseModelBin matches model.safetensors tensor names, shapes, and values for all 5 models', () => {
   const models = [
     {
       canonical: 'mindgrab',
@@ -113,6 +113,10 @@ test('parseModelBin matches model.safetensors tensor names, shapes, and values f
       canonical: 'mindmap',
       srcDir: 'mindmap',
       remoteSt: 'public/models/model24chan18cls_gdice_prio/model.safetensors',
+    },
+    {
+      canonical: 'mindmap-omni',
+      srcDir: 'mindmap_omni',
     },
     {
       canonical: 'mindsnap',
@@ -559,7 +563,7 @@ test('conform (fHigh=0.98, CT Cormack, comply), bwlabels/EDT, and native label r
   assert.ok(fg > 100_000, `expected >100k foreground resliced voxels, got ${fg}`)
 })
 
-test('sha256Prefix8 matches node:crypto across edge lengths and all 4 model.bin payloads', async () => {
+test('sha256Prefix8 matches node:crypto across edge lengths and all 5 model.bin payloads', async () => {
   for (const len of [0, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1024]) {
     const buf = new Uint8Array(len)
     for (let i = 0; i < len; i++) buf[i] = (i * 37 + 13) & 0xff
@@ -568,7 +572,7 @@ test('sha256Prefix8 matches node:crypto across edge lengths and all 4 model.bin 
     // Repeated call hits WeakMap cache with identical value
     assert.equal(await sha256Prefix8(buf), expected)
   }
-  for (const dir of ['mindgrab', 'mindmap', 'mindsnap', 'model16chan18cls']) {
+  for (const dir of ['mindgrab', 'mindmap', 'mindmap_omni', 'mindsnap', 'model16chan18cls']) {
     const raw = new Uint8Array(readFileSync(join(repoRoot, 'src', 'models', dir, 'model.bin')))
     const expected = createHash('sha256').update(raw).digest('hex').slice(0, 8)
     assert.equal(await sha256Prefix8(raw), expected, `model.bin SHA-256 prefix mismatch for ${dir}`)
@@ -821,7 +825,7 @@ test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persiste
   if (existsSync(distIndex)) {
     const mod = await import(`file://${distIndex}?v=${Date.now()}`)
     // mindmap-fast & 16chan18cls must be refused for segmentTissues (matching model_capabilities.json)
-    for (const m of ['mindmap-fast', '16chan18cls', 'mindgrab', 'mindsnap']) {
+    for (const m of ['mindmap-fast', '16chan18cls', 'mindgrab', 'mindmap-omni', 'mindsnap']) {
       await assert.rejects(
         () => mod.segmentTissues(new Uint8Array([1, 2, 3, 4]), { model: m }),
         (err) => err && err.code === 'unsupported-option',

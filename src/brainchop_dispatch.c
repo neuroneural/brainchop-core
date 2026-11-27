@@ -44,6 +44,7 @@ typedef struct {
 static const bc_model_entry BC_MODELS[] = {
 	{ "mindgrab",     "Skull stripping in any modality" },
 	{ "mindmap",      "18-class cortical and subcortical segmentation (default)" },
+	{ "mindmap-omni", "Contrast-agnostic 18-class segmentation (T2w, FLAIR, T1w, ULF, PET)" },
 	{ "mindsnap",     "104-class Desikan-Killiany cortical and subcortical parcellation" },
 	{ "mindmap-fast", "Fast lightweight 18-class segmentation" },
 };
@@ -82,6 +83,8 @@ static const char *resolve_model(const char *raw) {
 	if (!raw || !raw[0]) return NULL;
 	if (strcmp(raw, "16chan18cls") == 0 || strcmp(raw, "model16chan18cls") == 0)
 		return "mindmap-fast";
+	if (strcmp(raw, "mindmap_omni") == 0)
+		return "mindmap-omni";
 	for (size_t i = 0; i < BC_MODEL_COUNT; i++) {
 		if (strcmp(raw, BC_MODELS[i].name) == 0)
 			return BC_MODELS[i].name;
@@ -317,7 +320,7 @@ int main(int argc, char **argv) {
 	const char *canonical = resolve_model(model_name);
 	if (!canonical) {
 		fprintf(stderr,
-			"brainchop: unknown model '%s'. Available models: mindgrab, mindmap, mindsnap, mindmap-fast.\n",
+			"brainchop: unknown model '%s'. Available models: mindgrab, mindmap, mindmap-omni, mindsnap, mindmap-fast.\n",
 			model_name);
 		const char *hint = legacy_hint(model_name);
 		if (hint) fprintf(stderr, "brainchop: %s\n", hint);

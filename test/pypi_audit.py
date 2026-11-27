@@ -27,7 +27,7 @@ for binary in (package/'bin').rglob('*'):
     data=binary.read_bytes(); selected=[]
     baseline=binary.name.startswith('hardware-probe')
     model=binary.name.removeprefix('brainchop-').removesuffix('.exe')
-    model='model16chan18cls' if model in ('16chan18cls','mindmap-fast') else model
+    model='model16chan18cls' if model in ('16chan18cls','mindmap-fast') else ('mindmap' if model=='mindmap-omni' else model)
     for path in (ROOT/'src/cuda_modules').glob('*.fatbin'):
         for kind,arch,image in fatbin_images(path.read_bytes()):
             present=image in data

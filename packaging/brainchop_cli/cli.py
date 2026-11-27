@@ -25,6 +25,7 @@ def get_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   brainchop input.nii.gz -o output.nii.gz
+  brainchop flair.nii.gz -m mindmap-omni -o labels_omni.nii.gz
   brainchop input.nii.gz -m mindmap-fast -o output_fast.nii.gz
   brainchop input.nii.gz --skull-strip --mask brain_mask.nii.gz
   brainchop input.nii.gz -m mindmap --pve -o tissues.nii.gz
@@ -38,7 +39,7 @@ conformed 256^3 label/PVE outputs.
     parser.add_argument("-o", "--output", default="output.nii.gz",
                         help="Output path (default: derive a name from input and model)")
     parser.add_argument("-m", "--model", default="mindmap",
-                        help="mindgrab, mindmap (default; 18-class), mindsnap (104-class), or mindmap-fast (fast lightweight)")
+                        help="mindgrab, mindmap (default; 18-class T1w), mindmap-omni (contrast-agnostic 18-class), mindsnap (104-class), or mindmap-fast (fast lightweight)")
     parser.add_argument("-l", "--list", action="store_true", help="List embedded models")
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {_package_version()}",
                         help="Show version and exit")
@@ -105,7 +106,7 @@ def main():
         parser.print_help()
         return
     if args.custom and not args.skull_strip:
-        parser.error("--custom is unavailable: this release supports only the four embedded models")
+        parser.error("--custom is unavailable: this release supports only the five embedded models")
     model_name = "mindgrab" if args.skull_strip else args.model
     canonical = native.MODEL_ALIASES.get(model_name, model_name)
     if args.beam is not None or args.no_optimize or args.batch_size != 1:

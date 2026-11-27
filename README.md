@@ -48,19 +48,20 @@ Metrics below are from the locked evaluation ledger (`v4.0` release weights for 
 | Mindboggle-101 Shared-11 Manual Dice | 0.829 | 0.826 | 0.822 | 0.827 | **0.843** |
 | Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | 0.720 | — | 0.714 (`--parc`) | **0.824** |
 | EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | 0.794 | 0.684 | 0.640 | 0.792 | **0.811** |
-| OASIS-3 AD vs CN (`N=1,043`) Hippocampal `%TBVV` AUROC | 0.805 | — | **0.830** | — | 0.749 |
-| Surgical Resection Cavity False-Positive Parenchyma Rate ↓ | 46.1% | — | 40.0% | 80.1% | **21.2%** |
-| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | 2.26% | 2.83% | — | 3.38% |
+| OASIS-3 AD vs CN (`N=1,043` cohort) Hippocampal `%TBVV` AUROC | 0.805 | **0.835** | 0.830 | 0.819 (`--parc`) | 0.749 |
+| Surgical Resection Cavity (`N=50`) False-Positive Parenchyma Rate ↓ | 46.1% | 32.2% | 40.0% | 80.1% | **21.2%** |
+| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | 2.26% | 2.83% | 2.91% | 3.38% |
 | Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | 0.636 | **0.649** | —† | 0.621 | 0.397 |
 | Severe Acquisition Noise (10% head-masked noise, Mindboggle `N=20`, Shared-11 Dice) | **0.819** | 0.808 | 0.813 | 0.784 | 0.796 |
 | Same-Laptop Apple M1 (16 GB) Runtime & Peak Memory *(WebGPU vs CPU / MPS)* | 3.8 s (1.6 GiB) | 3.9 s (1.6 GiB) | **2.3 s (1.3 GiB)** | 656 s (16.7 GiB, swaps) | 311 s (8.4 GiB) |
 
-*(Bold indicates the best value in each row. On the 16 GB Apple M1 laptop, SynthSeg 2.0's 16.7 GiB peak footprint exceeds physical RAM and triggers macOS swap. \* `mindmap-fast` v4.1 was evaluated on Mindboggle `0.822`, IBSR-18 `0.824`, HiSUB25 `0.824`, LPBA40 `0.708`, MALC-15 `0.810`, and CANDI `0.804`; MALC-35 and Hammers were not re-run. † On 64 mT `2.34 mm` MRI (`ds006557`), `mindmap-fast` v4.1 achieves `0.631` self-consistency vs paired 3T (`mindmap`: `0.653`).)*
+*(Bold indicates the best value in each row. On the 16 GB Apple M1 laptop, SynthSeg 2.0's 16.7 GiB peak footprint exceeds physical RAM and triggers macOS swap. \* `mindmap-fast` v4.1 was evaluated on Mindboggle `0.822`, IBSR-18 `0.824`, HiSUB25 `0.824`, LPBA40 `0.708`, MALC-15 `0.810`, and CANDI `0.804`; MALC-35 and Hammers were not re-run. † On 64 mT `2.34 mm` MRI (`ds006557`), `mindmap-fast` v4.1 achieves `0.631` self-consistency vs paired 3T (`mindmap`: `0.653`; `mindsnap`: `0.667`).)*
+
+**Choosing between `mindmap` and `mindmap-fast`:** Both 18-class models are trained for clinical and dementia research cohorts. `mindmap-fast` (`v4.1`) delivers strong dementia morphometry (OASIS-3 AD vs CN `%TBVV` AUROC `0.830`, HarP AD vs CN AUROC `0.881`, Emory hippocampal Dice `0.810`), thick-slice robustness (`0.772` at 5 mm), and lower focal-lesion false positives on surgical resections (`40.0%` vs `46.1%`) and stroke (`58.7%` vs `74.7%`) than `mindmap` (`v4.0`) at ~1.3 GiB peak memory and 2.3 s on Apple M1 WebGPU. Choose `mindmap` (`v4.0`) when you need experimental `--pve` tissue fractions, finer sulcal detail, or higher HarP hippocampal asymmetry correlation (`r = 0.794` vs `0.640`).
 
 **Known limitations:**
-- **Thick-slice clinical scans (5 mm):** `mindmap-fast` (`v4.1`) is trained with anisotropic clinical degradation and reaches `0.772` Shared-11 Dice on 5 mm acquisitions (`+5.75 pp` over legacy v3.5), closing most of the gap to SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`), whereas isotropic-trained `mindmap` / `mindsnap` (`v4.0`) score `0.734–0.739` at 5 mm.
+- **Thick-slice clinical scans (5 mm):** `mindmap-fast` (`v4.1`) is trained with anisotropic clinical degradation and reaches `0.772` Shared-11 Dice on 5 mm acquisitions (`+5.75 pp` over legacy v3.5), narrowing most of the gap to SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`), whereas isotropic-trained `mindmap` / `mindsnap` (`v4.0`) score `0.729` at 5 mm.
 - **Sub-voxel grid shifts & large head tilts:** Inference runs directly on a single conformed 1 mm `256³` grid without affine registration or test-time augmentation, so sub-voxel padding/grid shifts or large head tilts can reduce boundary overlap compared to scan–rescan repeatability.
-- **Choosing between `mindmap` and `mindmap-fast`:** Both models include atrophy-repaired training suitable for dementia and clinical research cohorts (`mindmap-fast` v4.1 achieves OASIS-3 AD vs CN `%TBVV` AUROC `0.830`, HarP AD vs CN AUROC `0.881`, Emory hippocampal Dice `0.810`, and lower focal-lesion false positives on surgical resections and stroke than `mindmap` v4.0 at ~1.3 GiB peak memory). Choose `mindmap` when you need experimental `--pve` tissue fractions, finer sulcal detail, or higher HarP hippocampal asymmetry correlation (`r = 0.794` vs `0.640`).
 - **Experimental `--pve` tissue fractions:** Continuous GM/WM/CSF/Brain probability maps (`mindmap --pve` / `segmentTissues`) are experimental and have not yet been quantitatively benchmarked against CAT12 or FSL FAST.
 
 ### Weight Provenance (SHA-256)

@@ -36,17 +36,18 @@ const { image, backend, elapsedMs } = await segment(input, {
 | `'mindgrab'` | Modality-agnostic skull stripping (T1, T2, FLAIR, DWI, CT, etc.) | input image with non-brain voxels floored (optional binary `mask`) |
 | `'mindmap'` | Primary 18-class cortical and subcortical segmentation | label volume (or tissue fractions via `segmentTissues`) |
 | `'mindsnap'` | 104-class Desikan-Killiany cortical + subcortical parcellation | label volume |
-| `'mindmap-fast'` | Fast lightweight 18-class segmentation (`'16chan18cls'` alias) | label volume |
+| `'mindmap-fast'` | Fast lightweight 18-class cortical and subcortical segmentation (`'16chan18cls'` alias) | label volume |
 
 Each `MODELS` entry (and `listModels()`) carries `colormap`: `{ R, G, B, labels }`,
 ready for viewers such as NiiVue.
 
-`mindmap` and `mindmap-fast` apply class-aware connected-component cleanup with
-neighboring-label refill by default. Pass `{ legacyCleanup: true }` for the
-original whole-brain-only 26-connected cleanup. Categorical outputs reslice to
-the native input grid via midpoint majority voting; masks use nearest-neighbor
-resampling; continuous tissue maps use trilinear resampling. Invalid, empty, or
-severely fragmented categorical outputs fail explicitly with `inference-failed`.
+`mindmap`, `mindmap-fast`, and `mindsnap` apply class-aware connected-component
+cleanup with neighboring-label refill by default. Pass `{ legacyCleanup: true }`
+for the original whole-brain-only 26-connected cleanup. Categorical outputs
+reslice to the native input grid via midpoint majority voting; masks use
+nearest-neighbor resampling; continuous tissue maps use trilinear resampling.
+Invalid, empty, or severely fragmented categorical outputs fail explicitly with
+`inference-failed`.
 
 ## Continuous tissue maps (experimental)
 
@@ -62,10 +63,10 @@ const { tissues, backend } = await segmentTissues(input, {
 ```
 
 `segmentTissues` computes experimental GM/WM/CSF/Brain partial-volume tissue
-fractions from `mindmap` (or `mindmap-fast` / `'16chan18cls'`) across WebGPU,
-WebGL2, and CPU. `saveConform`, `gzipOutput`, `onProgress`, and `webgpuMode`
-work as for `segment`; mask, border, and legacy categorical cleanup options are
-refused.
+fractions from `mindmap` across WebGPU, WebGL2, and CPU (`mindmap-fast` /
+`'16chan18cls'`, `mindsnap`, and `mindgrab` do not support `segmentTissues`).
+`saveConform`, `gzipOutput`, `onProgress`, and `webgpuMode` work as for
+`segment`; mask, border, and legacy categorical cleanup options are refused.
 
 ## Backends & Requirements
 

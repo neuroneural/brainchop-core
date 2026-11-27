@@ -787,7 +787,7 @@ test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persiste
       datatypeCode: NIFTI_DT.FLOAT32,
       dims, affine, rejectConstant: true,
     }),
-    /input image is constant.*all 64 finite voxels equal 7/,
+    { message: /^brainchop-core: input image is constant.*all 64 finite voxels equal 7/ },
   )
   assert.throws(
     () => conformVolumeData({
@@ -795,7 +795,7 @@ test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persiste
       datatypeCode: NIFTI_DT.FLOAT32,
       dims, affine, rejectConstant: true,
     }),
-    /input has no finite voxels/,
+    { message: /^brainchop-core: input has no finite voxels/ },
   )
 
   // 2. Reusable largestBinaryComponent26 scratch leaves zero stale state across repeated calls

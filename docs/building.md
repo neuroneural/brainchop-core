@@ -96,9 +96,9 @@ otherwise, so an executable never advertises an option it would refuse:
 
 ```text
 brainchop-mindgrab       --crop [PCT]   --mask [PATH]   --border MM
-brainchop-mindmap-fast    --save-conform
+brainchop-mindmap-fast   --save-conform   --legacy-cleanup
 brainchop-mindmap        --save-conform   --pve   --legacy-cleanup
-brainchop-mindsnap       --save-conform
+brainchop-mindsnap       --save-conform   --legacy-cleanup
 ```
 
 `--pve` (long form `--partial-volume-estimate`) is an explicit model capability
@@ -198,8 +198,10 @@ brainchop: --inverse-conform is not available here: reslicing to the input grid 
   to keep the conformed 256^3 volume instead
 ```
 
-MindMap retains PR #16's default speckle cleanup and its `--legacy-cleanup`
-option. The other models retain the largest 26-connected nonzero component.
+Label models (`mindmap`, `mindmap-fast`, and `mindsnap`) apply class-aware
+connected-component cleanup with neighboring-label refill by default, with
+`--legacy-cleanup` to restore whole-brain 26-connected filtering. MindGrab
+retains the largest 26-connected nonzero component.
 Categorical outputs are checked before cleanup: invalid labels, empty or more
 than 95% filled foreground, and excessive fragmentation fail inference rather
 than being saved as successful results. Automatic backend selection can retry
@@ -253,12 +255,14 @@ because a tissue fraction is continuous. No label volume is written at all.
   `--export-classes`. An explicit
   GPU backend without a tissue-prior head is refused.
 
-MindMap label output now uses the browser's 18-class cleanup with neighbor
-refill enabled: keep the six-connected brain, retain the largest component of
-classes 1, 2, 5, 6 and 13, and repaint suppressed components with the most common
-surviving label on their face boundary. Other classes retain all components
-inside the brain. `--legacy-cleanup` restores the previous 26-connected
-whole-brain filter. This flag is MindMap-only and cannot accompany `--pve` or
+Label outputs (`mindmap`, `mindmap-fast`, and `mindsnap`) use the browser's
+class-aware cleanup with neighbor refill enabled by default (for the 18-class
+models: keep the six-connected brain, retain the largest component of classes
+1, 2, 5, 6 and 13, and repaint suppressed components with the most common
+surviving label on their face boundary; other classes retain all components
+inside the brain; `mindsnap` applies hierarchical 104-class cleanup).
+`--legacy-cleanup` restores the previous 26-connected whole-brain filter. This
+flag applies to label output only and cannot accompany `--pve` or
 `--export-classes`; tissue fractions and raw logits have separate processing.
 The browser and native runtimes both enable this refill by default (`--legacy-cleanup`
 / `legacyCleanup: true` restores whole-brain-only filtering).

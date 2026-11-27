@@ -9,7 +9,7 @@ on macOS); on CPU-only hosts with newer SIMD extensions (e.g., Apple SME or
 AVX-512 VNNI), `pip install --no-binary brainchop brainchop` builds with
 host-specific CPU flags for faster CPU inference. The distribution version
 (`packaging/PYPI_VERSION`) and native runtime version (`src/version.h`)
-are synchronized at **1.1.0**, succeeding `1.0.0` and the legacy
+are synchronized at **1.1.1**, succeeding `1.1.0`, `1.0.0`, and the legacy
 Python/tinygrad `brainchop==0.2.5` release.
 
 ## Installation, shared caches and first use

@@ -2,6 +2,22 @@
 
 All notable changes to BrainChop Core are documented in this file.
 
+## [1.1.1] - 2026-11-26
+
+Non-weight-changing accuracy guards and performance upgrades across native C/CUDA/Metal/CPU engines and Browser WebGPU (`@brainchop/core`), preserving 100% weight compatibility with `1.1.0`.
+
+### Accuracy Guards & PVE Fixes
+- **Small-Brain (`< 838.9 mL`) Normalization Guard:** When `q_high <= q_low` on tightly skull-stripped pediatric, infant, or hemispherectomy brains (`histogram[0] >= 95%`), `[q_low, q_high]` now falls back to non-zero foreground quantiles identically across C, CUDA, Metal, and WebGPU (`>= 839 mL` volumes remain bit-identical). Aligned Metal's `normalize_input()` with `BC_MODEL_QUANTILE_MODE`.
+- **`mindmap --pve` (`cat_lite`) & Contract Parity:** Included `Brain-Stem (13)` in `BC_PRIOR_WM_MASK` (closing the brainstem hole in `brain_wm` / `brain_brain`), split myelinated deep subcortical nuclei `{7: Thalamus, 10: Pallidum, 17: VentralDC}` 50/50 across GM/WM with `STAT_PURITY = 0.55` to prevent cortical `mu_gm/sd_gm` skew, and aligned the JS `mindmap-fast` PVE capability contract with C.
+- **MindGrab Intensity Encoding:** Preserved scaled NIfTI intensities and hardened integer-encoding rules across C and WebGPU.
+
+### Performance & Memory Upgrades
+- **Native CUDA ABI 3 (`nvcc 12.8.93`, PTX `8.7`):** Pre-padded 24-channel WMMA weights, fused warp→block→256-stripe FP64 moments inside convolution kernels (preserving byte-for-byte `--tune` invariance), exact `BC_TC_PURE` background row skipping, coalesced `half2` `norm_gelu`, fused L12 + `uint8` classifier, and GPU PVE priors/blur/support (**2.8–3.8×** faster GPU compute, **2.1–3.0×** faster end-to-end CLI wall time on V100 / RTX 2080 Ti).
+- **Apple Silicon Metal `--pve` Turbo:** Attached turbo PVE priors, blur, and support kernels directly to Layer-12 `y8` output (`~1.6 GiB` peak footprint vs `~4.0 GiB` FP16 fallback on Apple M1).
+- **CPU Turbo on Apple M1 (`ARMv8.2 SDOT`) & Non-VNNI x86-64 (`F16C + AVX2 / AVX-512F`):** Unlocked `vdotq_s32` int8 CPU turbo on Apple M1 (`FEAT_DotProd=1, FEAT_I8MM=0`), added compact `fp16` + `F16C` + `AVX2`/`AVX-512F` kernels and compact 64-voxel block `y8` storage (`~60%` lower peak RAM) with exact `BC_TC_PURE` row skipping.
+- **Parallel Native C Host Loops:** Rewrote `src/bwlabel.c` with `uint8` bitshift indexing and parallel z-slab scanline union-find (bit-exact vs 488 browser-oracle phantoms), skipped `private_float_copy` on label/`--pve` CLI runs, and parallelized `conform.c`, `brainchopc.c`, and `cat_lite.c` (**11–20×** faster host pre/post-processing).
+- **Browser WebGPU (`@brainchop/core`):** Replaced per-call Worker creation/termination with a lazy persistent singleton Worker + `disposeWorker()`, defaulted warm calls on the same `GPUDevice` to pooled workspace reuse (`keepSharedWorkspace: true`), memoized parsed/packed weights, removed redundant uncompressed output buffer copies, fused constant-input validation into `conform-volume.js`, and reused flat typed-array scratch in `bwlabels.js`.
+
 ## [1.1.0] - 2026-11-23
 
 ### Breaking Changes

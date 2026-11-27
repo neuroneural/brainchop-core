@@ -94,7 +94,7 @@ def main():
                     tag = f'{model}-{kind}-tune-wmma{wmma}'
                     tuned, _, log = run(kind, model, 't1_crop', False, tag,
                                        {'BRAINCHOPC_CUDA_WMMA': wmma}, tune=True)
-                    assert 'brainchopc: chose ' in log and 'tuning failed' not in log, tag
+                    assert 'brainchop-core: chose ' in log and 'tuning failed' not in log, tag
                     cached, _, log = run(kind, model, 't1_crop', False, tag + '-cached',
                         {'BRAINCHOPC_TUNE': '2', 'BRAINCHOPC_CUDA_WMMA': wmma})
                     assert 'tuning the ' not in log and cached == tuned, tag + ': cache reuse failed'

@@ -106,7 +106,8 @@ test('parseModelBin matches model.safetensors tensor names, shapes, and values f
       canonical: 'mindmap-fast',
       alias: '16chan18cls',
       srcDir: 'model16chan18cls',
-      remoteSt: 'public/models/model16chan18cls/model.safetensors',
+      // MindMap-16 v4.1 weights shipped in brainchop-core ahead of brainchop-test@origin/webgpu;
+      // local model.bin vs model.safetensors parity is still checked strictly above.
     },
     {
       canonical: 'mindmap',
@@ -175,7 +176,7 @@ test('parseModelBin matches model.safetensors tensor names, shapes, and values f
     assert.equal(d.dilations.length, desc.convs.length)
 
     // Also cross-check against brainchop-test@origin/webgpu:public/models/*/model.safetensors
-    if (existsSync(join(brainchopTestDir, '.git'))) {
+    if (m.remoteSt && existsSync(join(brainchopTestDir, '.git'))) {
       const remoteBuf = execFileSync(
         'git',
         ['-C', brainchopTestDir, 'show', `origin/webgpu:${m.remoteSt}`],

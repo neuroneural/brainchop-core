@@ -443,7 +443,7 @@ static int opencl_available(void) {
 
 static int opencl_error(cl_int error, const char *operation) {
 	if (error == CL_SUCCESS) return 0;
-	fprintf(stderr, "brainchopc: OpenCL %s failed (%d)\n", operation, (int)error);
+	fprintf(stderr, "brainchop-core: OpenCL %s failed (%d)\n", operation, (int)error);
 	return 1;
 }
 
@@ -504,7 +504,7 @@ static int build_program(opencl_state *state, int vpt, int local) {
 			clGetProgramBuildInfo(state->program, state->device,
 				CL_PROGRAM_BUILD_LOG, log_length, log, NULL);
 			log[log_length] = 0;
-			fprintf(stderr, "brainchopc: OpenCL build failed:\n%s\n", log);
+			fprintf(stderr, "brainchop-core: OpenCL build failed:\n%s\n", log);
 			free(log);
 		}
 		return 1;
@@ -530,7 +530,7 @@ static int initialize_state(opencl_state *state, int adapter, int vpt, int local
 	state->local = local;
 	state->device = select_device(adapter, device_name, sizeof(device_name));
 	if (!state->device) return 1;
-	fprintf(stderr, "brainchopc: OpenCL device: %s\n", device_name);
+	fprintf(stderr, "brainchop-core: OpenCL device: %s\n", device_name);
 	state->context = clCreateContext(NULL, 1, &state->device, NULL, NULL, &error);
 	if (opencl_error(error, "context creation")) goto fail;
 	state->queue = clCreateCommandQueue(state->context, state->device, 0, &error);
@@ -738,7 +738,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 	const int local_count =
 		(int)(sizeof(opencl_tune_local) / sizeof(*opencl_tune_local));
 
-	fprintf(stderr, "brainchopc: tuning OpenCL convolution for this device "
+	fprintf(stderr, "brainchop-core: tuning OpenCL convolution for this device "
 		"(%d variants, once per device -- caching the result)\n",
 		vpt_count * local_count);
 
@@ -748,7 +748,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 			cl_uint digest = 0;
 			double best_sample = 0.0;
 			if (build_program(state, vpt, local)) {
-				fprintf(stderr, "brainchopc:   vpt=%-2d local=%-4d unavailable\n",
+				fprintf(stderr, "brainchop-core:   vpt=%-2d local=%-4d unavailable\n",
 					vpt, local);
 				continue;
 			}
@@ -765,7 +765,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 			}
 			if (opencl_run_conv(state, scratch_a, scratch_b, weights, dilation) ||
 					clFinish(state->queue) != CL_SUCCESS) {
-				fprintf(stderr, "brainchopc:   vpt=%-2d local=%-4d unavailable\n",
+				fprintf(stderr, "brainchop-core:   vpt=%-2d local=%-4d unavailable\n",
 					vpt, local);
 				continue;
 			}
@@ -774,7 +774,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 				reference = digest;
 				have_reference = 1;
 			} else if (digest != reference) {
-				fprintf(stderr, "brainchopc:   vpt=%-2d local=%-4d rejected "
+				fprintf(stderr, "brainchop-core:   vpt=%-2d local=%-4d rejected "
 					"(checksum mismatch)\n", vpt, local);
 				continue;
 			}
@@ -796,7 +796,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 					best_sample = elapsed;
 			}
 			if (best_sample <= 0.0) continue;
-			fprintf(stderr, "brainchopc:   vpt=%-2d local=%-4d %7.2f ms\n",
+			fprintf(stderr, "brainchop-core:   vpt=%-2d local=%-4d %7.2f ms\n",
 				vpt, local, best_sample);
 			if (!found || best_sample < best_ms) {
 				found = 1;
@@ -807,7 +807,7 @@ static int opencl_tune(opencl_state *state, cl_mem scratch_a, cl_mem scratch_b,
 		}
 	}
 	if (!found) return 1;
-	fprintf(stderr, "brainchopc: chose vpt=%d local=%d (%.2f ms)\n",
+	fprintf(stderr, "brainchop-core: chose vpt=%d local=%d (%.2f ms)\n",
 		chosen_vpt, chosen_local, best_ms);
 	*best_vpt = chosen_vpt;
 	*best_local = chosen_local;
@@ -834,7 +834,7 @@ static int opencl_segment(const unsigned char *conformed,
 	size_t required = 2 * activation_bytes +
 		spec->weight_count * sizeof(uint16_t);
 	if (max_allocation < activation_bytes || global_memory < required) {
-		fprintf(stderr, "brainchopc: OpenCL device memory is insufficient "
+		fprintf(stderr, "brainchop-core: OpenCL device memory is insufficient "
 			"(needs about %.1f GB, maximum allocation %.1f GB)\n",
 			(double)required / 1e9, (double)max_allocation / 1e9);
 		release_state(&state);
@@ -931,10 +931,10 @@ static int opencl_segment(const unsigned char *conformed,
 			if (!opencl_tune(&state, first, second, weight_buffer, &vpt, &local)) {
 				int store[2] = { vpt, local };
 				if (bc_accel_tune_store(key, store, 2))
-					fprintf(stderr, "brainchopc: could not save the tuning "
+					fprintf(stderr, "brainchop-core: could not save the tuning "
 						"result; it will be measured again next run\n");
 			} else {
-				fprintf(stderr, "brainchopc: tuning failed; using the "
+				fprintf(stderr, "brainchop-core: tuning failed; using the "
 					"compiled-in convolution shape\n");
 				vpt = OCL_VPT;
 				local = OCL_LOCAL;

@@ -42,7 +42,7 @@ for model,refs,budgets in [('mindgrab',('bet.nii.gz',None),(64,64)),('16chan18cl
         # Metal has no BC_TIME_GPU counter; forced backend plus no fallback is
         # its existing gate. CUDA additionally reports synchronized GPU timing.
         if a.backend=='cuda':
-            timing=re.search(r'brainchopc:\s+total\s+([0-9.]+) ms',log)
+            timing=re.search(r'brainchop-core:\s+total\s+([0-9.]+) ms',log)
             assert 'CUDA stages (' in log and timing and float(timing[1])>0,log
             if index==0: assert 'tuning the ' in log and 'caching the result' in log,log
             else: assert 'tuning the ' not in log,log

@@ -47,7 +47,7 @@ system glibc and zlib. OpenCL loads its driver dynamically when used. Explicit l
 
 ```text
 brainchop-mindgrab       skull stripping in any modality
-brainchop-mindmap-fast   18-class brain segmentation (16-channel, MindMap v3.5)
+brainchop-mindmap-fast   18-class brain segmentation (16-channel, MindMap-16 v4.1)
 brainchop-mindmap        18-class brain segmentation (24-channel, MindMap-18 v4.0 Gold)
 brainchop-mindsnap       104-class Desikan-Killiany parcellation (24-channel, MindSnap-104 v4.0 Gold)
 ```
@@ -455,7 +455,7 @@ make macos-release \
   MACOS_INSTALLER_IDENTITY='Developer ID Installer: Your Name (ABCDE12345)'
 ```
 
-The finished artifact is `dist/brainchopc-0.1.0-macos-arm64.pkg`.
+The finished artifact is `dist/brainchop-0.1.0-macos-arm64.pkg`.
 `NOTARY_PROFILE` defaults to `brainchopc-notary`. For a local packaging test
 that cannot be notarized, use:
 

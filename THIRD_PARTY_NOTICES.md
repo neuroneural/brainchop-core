@@ -159,14 +159,14 @@ The MindGrab weights were obtained from the upstream model release, whose
 model-card metadata declares the artifact MIT licensed. Reference checkpoint:
 <https://huggingface.co/neuroneural/mindgrab/resolve/main/model.pth>.
 
-All four models' weights were created by Sergey Plis (2026), are MIT licensed,
-and are taken from <https://github.com/neuroneural/brainchop-test>
-(`public/models/`, `webgpu` branch): MindGrab from `mindgrab`,
-`model16chan18cls` (MindMap-16ch v3.5, PR #25) from `model16chan18cls`,
-`mindmap` (MindMap-18 v4.0 Gold, PR #37) from `model24chan18cls_gdice_prio`,
-and `mindsnap` (MindSnap-104 v4.0 Gold, PR #37) from `model24chan104cls_v3_repbn`
-(each `model.bin` and `model.safetensors` byte-identical). Files derived from
-them here (the Metal headers, the CUDA and HIP modules) carry the same licence.
+All four models' weights were created by Sergey Plis (2026) and are MIT
+licensed: MindGrab (`mindgrab`), `mindmap` (MindMap-18 v4.0 Gold, PR #37, from
+`model24chan18cls_gdice_prio`), and `mindsnap` (MindSnap-104 v4.0 Gold, PR #37,
+from `model24chan104cls_v3_repbn`) are taken from
+<https://github.com/neuroneural/brainchop-test> (`public/models/`, `webgpu`
+branch), and `model16chan18cls` (`mindmap-fast`) ships the locked MindMap-16
+v4.1 (`A35C35D30`) checkpoint (replacing v3.5). Files derived from them here
+(the Metal headers, the CUDA and HIP modules) carry the same licence.
 
 MIT License
 

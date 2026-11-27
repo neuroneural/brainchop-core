@@ -335,7 +335,7 @@ static int pve_layout_invalid(void) {
 		classifier[1].size!=BC_MODEL_NCLASS*sizeof(__fp16);
 	for(size_t k=0;k<sizeof(BC_M(_weights))/sizeof(w[0]);k++)
 		bad|=w[k].offset<7ULL*BC_NVOX*sizeof(float);
-	if(bad)fprintf(stderr,"brainchopc: Metal export does not match the PVE head's layout\n");
+	if(bad)fprintf(stderr,"brainchop-core: Metal export does not match the PVE head's layout\n");
 	return bad;
 }
 
@@ -348,7 +348,7 @@ static int encode_pve_head(id<MTLDevice> metal, id<MTLComputeCommandEncoder> enc
 	id<MTLLibrary> library=[metal newLibraryWithSource:
 		[NSString stringWithUTF8String:bc_metal_pve_source] options:options error:&error];
 	if(!library) {
-		fprintf(stderr,"brainchopc: Metal PVE compilation failed: %s\n",
+		fprintf(stderr,"brainchop-core: Metal PVE compilation failed: %s\n",
 			error.localizedDescription.UTF8String);
 		return 1;
 	}
@@ -358,7 +358,7 @@ static int encode_pve_head(id<MTLDevice> metal, id<MTLComputeCommandEncoder> enc
 		id<MTLFunction> function=[library newFunctionWithName:[NSString stringWithUTF8String:names[k]]];
 		pipelines[k]=function?[metal newComputePipelineStateWithFunction:function error:&error]:nil;
 		if(!pipelines[k]) {
-			fprintf(stderr,"brainchopc: Metal pipeline %s failed: %s\n",names[k],
+			fprintf(stderr,"brainchop-core: Metal pipeline %s failed: %s\n",names[k],
 				error.localizedDescription.UTF8String);
 			return 1;
 		}
@@ -411,7 +411,7 @@ static int run_generated(id<MTLDevice> metal,
 		newLibraryWithSource:[NSString stringWithUTF8String:source_text]
 		options:options error:&error];
 	if(!library) {
-		fprintf(stderr,"brainchopc: Metal shader compilation failed: %s\n",
+		fprintf(stderr,"brainchop-core: Metal shader compilation failed: %s\n",
 			error.localizedDescription.UTF8String);
 		free(input);
 		return 1;
@@ -425,7 +425,7 @@ static int run_generated(id<MTLDevice> metal,
 		id<MTLComputePipelineState> pipeline=function?
 			[metal newComputePipelineStateWithFunction:function error:&error]:nil;
 		if(!pipeline) {
-			fprintf(stderr,"brainchopc: Metal pipeline %s failed: %s\n",
+			fprintf(stderr,"brainchop-core: Metal pipeline %s failed: %s\n",
 				kernel_names[i],error.localizedDescription.UTF8String);
 			free(input);
 			return 1;
@@ -445,7 +445,7 @@ static int run_generated(id<MTLDevice> metal,
 	};
 	free(input);
 	if(!buffers[0]||!buffers[1]||(!buffers[2]&&!tissue_planes)) {
-		fprintf(stderr,"brainchopc: unable to allocate Metal working memory\n");
+		fprintf(stderr,"brainchop-core: unable to allocate Metal working memory\n");
 		return 1;
 	}
 	pack_weights(buffers[0].contents,weights);
@@ -480,7 +480,7 @@ static int run_generated(id<MTLDevice> metal,
 	[command commit];
 	[command waitUntilCompleted];
 	if(command.status==MTLCommandBufferStatusError) {
-		fprintf(stderr,"brainchopc: Metal execution failed: %s\n",
+		fprintf(stderr,"brainchop-core: Metal execution failed: %s\n",
 			command.error.localizedDescription.UTF8String);
 		return 1;
 	}
@@ -495,7 +495,7 @@ static int run_generated(id<MTLDevice> metal,
 	memcpy(result,buffers[2].contents,output_bytes);
 	if(getenv("BRAINCHOPC_METAL_PROFILE")) {
 		NSTimeInterval end=[NSDate timeIntervalSinceReferenceDate];
-		fprintf(stderr,"brainchopc: Metal compile %.3fs, run %.3fs, read %.3fs\n",
+		fprintf(stderr,"brainchop-core: Metal compile %.3fs, run %.3fs, read %.3fs\n",
 			compiled-start,finished-compiled,end-finished);
 	}
 	return 0;
@@ -531,7 +531,7 @@ static int metal_segment(const unsigned char *conformed, float *result,
 				BC_M_UC(_OUTPUT_BYTES),pack_model_weights,planes,
 				planes?options->tissue_priors_prepared:NULL);
 		} @catch(NSException *exception) {
-			fprintf(stderr,"brainchopc: Metal backend error: %s\n",
+			fprintf(stderr,"brainchop-core: Metal backend error: %s\n",
 				exception.reason.UTF8String);
 			return 1;
 		}

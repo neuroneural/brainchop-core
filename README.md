@@ -34,31 +34,33 @@ All four models are compiled directly into self-contained binaries (no separate 
 | `mindgrab` (`--skull-strip`) | MindGrab | `brainchop-mindgrab` | 145K | 2 | T1, T2, FLAIR, DWI, EPI, MRA, PDw, qT1, CT, PET | Modality-agnostic skull stripping & brain masking (`--mask`, `--border`, `--crop`) |
 | `mindmap` *(default)* | MindMap-24 | `brainchop-mindmap` | 188K | 18 | 3D T1w MRI | Primary cortical & subcortical segmentation; optional experimental GM/WM/CSF tissue fractions (`--pve`) |
 | `mindsnap` | MindSnap-104 | `brainchop-mindsnap` | 190K | 104 | 3D T1w MRI | Desikan-Killiany cortical + subcortical + 5-part corpus callosum parcellation |
-| `mindmap-fast` | MindMap-16 | `brainchop-mindmap-fast` | 84K | 18 | 3D T1w MRI | Fast lightweight 18-class preview (`16chan18cls` alias); **not** recommended for hippocampal atrophy morphometry |
+| `mindmap-fast` | MindMap-16 (v4.1) | `brainchop-mindmap-fast` | 84K | 18 | 3D T1w MRI | Fast lightweight 18-class cortical & subcortical segmentation (`16chan18cls` alias); atrophy-repaired and clinical-scan-hardened |
 
 *Training & label provenance:* `mindmap`, `mindsnap`, and `mindmap-fast` are trained on synthetic and T1w brain volumes supervised with FreeSurfer-convention anatomical parcellation labels; `mindgrab` is trained on multi-contrast synthetic and multi-modal neuroimaging volumes ([Fani et al., 2026](https://doi.org/10.1016/j.neuroimage.2026.122074)). The companion manuscript also evaluates a 50-class variant (`MindSnap-50`), omitted from this default runtime bundle to keep package footprints small.
 
 ### Validation Summary & Known Limitations
 
-Metrics below are from the locked evaluation ledger (`v3.8` spec / `v4.0` release weights; exact checkpoint checksums in [Weight Provenance](#weight-provenance-sha-256)):
+Metrics below are from the locked evaluation ledger (`v4.0` release weights for `mindmap` / `mindsnap` and `v4.1` release weights for `mindmap-fast`; exact checkpoint checksums in [Weight Provenance](#weight-provenance-sha-256)):
 
 | Benchmark | `mindmap` | `mindsnap` | `mindmap-fast` | SynthSeg 2.0 | FastSurferVINN 2.4.2 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 6 Manual-Label Cohorts Mean Dice (Mindboggle, IBSR18, LPBA40, HiSUB25, MALC-35, Hammers) | 0.792 | 0.790 | 0.790 | 0.801 | **0.803** |
+| 6 Manual-Label Cohorts Mean Dice (Mindboggle, IBSR18, LPBA40, HiSUB25, MALC-35, Hammers) | 0.792 | 0.790 | —\* | 0.801 | **0.803** |
 | Mindboggle-101 Shared-11 Manual Dice | 0.829 | 0.826 | 0.822 | 0.827 | **0.843** |
 | Mindboggle-101 Cortical DKT-62 Dice *(FS-initialized GT)* | — | 0.720 | — | 0.714 (`--parc`) | **0.824** |
-| EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | 0.794 | 0.684 | 0.009 | 0.792 | **0.811** |
-| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | 2.26% | 2.66% | — | 3.38% |
-| Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | 0.636 | **0.649** | 0.627 | 0.621 | 0.397 |
+| EADC-ADNI HarP (`N=135`) Hippocampal Asymmetry Pearson *r* | 0.794 | 0.684 | 0.640 | 0.792 | **0.811** |
+| OASIS-3 AD vs CN (`N=1,043`) Hippocampal `%TBVV` AUROC | 0.805 | — | **0.830** | — | 0.749 |
+| Surgical Resection Cavity False-Positive Parenchyma Rate ↓ | 46.1% | — | 40.0% | 80.1% | **21.2%** |
+| OASIS-TRT-20 Scan–Rescan Repeatability (Shared-11 AVD ↓) | **2.21%** | 2.26% | 2.83% | — | 3.38% |
+| Ultra-Low-Field 64 mT MRI (`ds006557`, `N=23`, 2.34 mm vs paired 3T FastSurfer ref) | 0.636 | **0.649** | —† | 0.621 | 0.397 |
 | Severe Acquisition Noise (10% head-masked noise, Mindboggle `N=20`, Shared-11 Dice) | **0.819** | 0.808 | 0.813 | 0.784 | 0.796 |
 | Same-Laptop Apple M1 (16 GB) Runtime & Peak Memory *(WebGPU vs CPU / MPS)* | 3.8 s (1.6 GiB) | 3.9 s (1.6 GiB) | **2.3 s (1.3 GiB)** | 656 s (16.7 GiB, swaps) | 311 s (8.4 GiB) |
 
-*(Bold indicates the best value in each row. On the 16 GB Apple M1 laptop, SynthSeg 2.0's 16.7 GiB peak footprint exceeds physical RAM and triggers macOS swap.)*
+*(Bold indicates the best value in each row. On the 16 GB Apple M1 laptop, SynthSeg 2.0's 16.7 GiB peak footprint exceeds physical RAM and triggers macOS swap. \* `mindmap-fast` v4.1 was evaluated on Mindboggle `0.822`, IBSR-18 `0.824`, HiSUB25 `0.824`, LPBA40 `0.708`, MALC-15 `0.810`, and CANDI `0.804`; MALC-35 and Hammers were not re-run. † On 64 mT `2.34 mm` MRI (`ds006557`), `mindmap-fast` v4.1 achieves `0.631` self-consistency vs paired 3T (`mindmap`: `0.653`).)*
 
 **Known limitations:**
-- **Thick-slice clinical scans (5 mm):** SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`) outperform isotropic-trained BrainChop (`0.734–0.739`) on heavily anisotropic 5 mm acquisitions.
+- **Thick-slice clinical scans (5 mm):** `mindmap-fast` (`v4.1`) is trained with anisotropic clinical degradation and reaches `0.772` Shared-11 Dice on 5 mm acquisitions (`+5.75 pp` over legacy v3.5), closing most of the gap to SynthSeg 2.0 (`0.791`) and FastSurferVINN (`0.789`), whereas isotropic-trained `mindmap` / `mindsnap` (`v4.0`) score `0.734–0.739` at 5 mm.
 - **Sub-voxel grid shifts & large head tilts:** Inference runs directly on a single conformed 1 mm `256³` grid without affine registration or test-time augmentation, so sub-voxel padding/grid shifts or large head tilts can reduce boundary overlap compared to scan–rescan repeatability.
-- **`mindmap-fast` hippocampal atrophy:** `mindmap-fast` does not include the atrophy-repaired training regime (HarP asymmetry `r = 0.009`); use `mindmap` or `mindsnap` for hippocampal morphometry or dementia cohorts.
+- **Choosing between `mindmap` and `mindmap-fast`:** Both models include atrophy-repaired training suitable for dementia and clinical research cohorts (`mindmap-fast` v4.1 achieves OASIS-3 AD vs CN `%TBVV` AUROC `0.830`, HarP AD vs CN AUROC `0.881`, Emory hippocampal Dice `0.810`, and lower focal-lesion false positives on surgical resections and stroke than `mindmap` v4.0 at ~1.3 GiB peak memory). Choose `mindmap` when you need experimental `--pve` tissue fractions, finer sulcal detail, or higher HarP hippocampal asymmetry correlation (`r = 0.794` vs `0.640`).
 - **Experimental `--pve` tissue fractions:** Continuous GM/WM/CSF/Brain probability maps (`mindmap --pve` / `segmentTissues`) are experimental and have not yet been quantitatively benchmarked against CAT12 or FSL FAST.
 
 ### Weight Provenance (SHA-256)
@@ -70,7 +72,7 @@ Every binary and npm asset in this repository is built directly from the verifie
 | `mindgrab` | MindGrab (NeuroImage 2026) | `c9a01490fe2d13acc1515fd019b69db176ebe6f40c9b84aeb77f25acbc2ee0f3` | `21bf4c811a4790fa2498a49f2aa9042f9108964111b54a006fde1194b0e0e7b9` | — |
 | `mindmap` | MindMap-24 | `58006d1951212bf33695a8f4409823e872902a6e060b21e87d3fd65c1eb7c4e5` | `b86e11e7884061b81c2ac6d253c90933a3651e0accb7657b9c90f98afcee76ef` | `f6b60026daccabc689ff56bbadd5c1141a5645529f75eb998fe58426ac7f1b48` |
 | `mindsnap` | MindSnap-104 | `995cdb522ba941b41ba7ab61d0484e8700f6c3d6084398ce28c6ce75d1ca2a1a` | `e485cac1ffc5bfc55a9cbca848d4fdae4a99a9f06cdec7e5d55e7801b9e44540` | `6b713d9d995bcce0ad5dd6c129f022aeb0241812f5acf64610f4a43ea6544bbc` |
-| `mindmap-fast` | MindMap-16 | `22d73f439fbf4e4195adbd68f813f3c433b2d3f336d48a097ce7fb83bc5785b6` | `aa0ea2e4a4f1fdffadf0bcb957f8aa5c13efd3dc4e7f85a39df2ae8690a6748f` | `5b8aade1940ae11ddd472a5a212da2a5b7d16f3ceec4f6884bcfe99f7f1bdfe5` |
+| `mindmap-fast` | MindMap-16 (v4.1) | `f6ea86f9836d60a08b04b358ef5bc278c2f5f204f33fa12295e550333cf0afb3` | `cfc06473c083108de1df8b0d9f5ab2993753efeb4e90f1684060cbda64420591` | `a255782088a5843b8ae10433fb8d487dd36774f852e2427bb7c86b560d1a054c` |
 
 ## Quick Install
 

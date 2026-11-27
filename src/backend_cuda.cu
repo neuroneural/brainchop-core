@@ -13,14 +13,14 @@
 
 static int cuda_error(cudaError_t error, const char *operation) {
 	if (error == cudaSuccess) return 0;
-	fprintf(stderr, "brainchopc: CUDA %s failed: %s\n",
+	fprintf(stderr, "brainchop-core: CUDA %s failed: %s\n",
 		operation, cudaGetErrorString(error));
 	if (error == cudaErrorNoKernelImageForDevice) {
 		int ordinal = 0;
 		cudaDeviceProp properties;
 		if (cudaGetDevice(&ordinal) == cudaSuccess &&
 				cudaGetDeviceProperties(&properties, ordinal) == cudaSuccess)
-			fprintf(stderr, "brainchopc: this build has no kernel for %s "
+			fprintf(stderr, "brainchop-core: this build has no kernel for %s "
 				"(compute capability %d.%d). Rebuild with "
 				"CUDA_ARCH=sm_%d%d, or use -backend cpu.\n",
 				properties.name, properties.major, properties.minor,

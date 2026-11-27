@@ -345,7 +345,7 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 				pipe[k].threadExecutionWidth!=32) library=nil;
 	}
 	if(!library) {
-		fprintf(stderr,"brainchopc: Metal turbo pipeline failed: %s\n",
+		fprintf(stderr,"brainchop-core: Metal turbo pipeline failed: %s\n",
 			error?error.localizedDescription.UTF8String:"missing kernel or unsupported threadgroup/SIMD width");
 		free(packed); free(input); bc_tc_free(&plan);
 		return 1;
@@ -366,7 +366,7 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	NSUInteger out_bytes=tissue_planes?(NSUInteger)BC_NVOX*BC_PRIOR_PLANES*sizeof(float):(NSUInteger)BC_NVOX;
 	id<MTLBuffer> labels=[metal newBufferWithLength:out_bytes options:shared];
 	if(!in||!wbuf||!lbuf||!rwbuf||!act[0]||!act[1]||!mom||!stats||!weff||!labels) {
-		fprintf(stderr,"brainchopc: unable to allocate Metal turbo memory\n");
+		fprintf(stderr,"brainchop-core: unable to allocate Metal turbo memory\n");
 		bc_tc_free(&plan);
 		return 1;
 	}
@@ -506,10 +506,10 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	[command waitUntilCompleted];
 	if(split) {
 		gpu[last]+=command.GPUEndTime-command.GPUStartTime;
-		for(int k=0;k<K_N;k++) fprintf(stderr,"brainchopc: turbo %-14s %7.1f ms\n",names[k],gpu[k]*1e3);
+		for(int k=0;k<K_N;k++) fprintf(stderr,"brainchop-core: turbo %-14s %7.1f ms\n",names[k],gpu[k]*1e3);
 	}
 	if(failed||command.status==MTLCommandBufferStatusError) {
-		fprintf(stderr,"brainchopc: Metal turbo execution failed: %s\n",
+		fprintf(stderr,"brainchop-core: Metal turbo execution failed: %s\n",
 			command.error?command.error.localizedDescription.UTF8String:"an earlier command buffer failed");
 		bc_tc_free(&plan);
 		return 1;
@@ -529,7 +529,7 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 		for(size_t i=0;i<BC_NVOX;i++) result[i]=lab[i];
 	}
 	if(prof)
-		fprintf(stderr,"brainchopc: Metal turbo plan+compile %.3fs, run %.3fs, read %.3fs, "
+		fprintf(stderr,"brainchop-core: Metal turbo plan+compile %.3fs, run %.3fs, read %.3fs, "
 			"%.0f%% of rows computed\n",compiled-start,finished-compiled,
 			[NSDate timeIntervalSinceReferenceDate]-finished,100.0*work/(NL*65536.0));
 	return 0;

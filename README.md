@@ -172,11 +172,20 @@ Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/RE
 
 | Backend | Hardware | Auto-Selected | Notes |
 | --- | --- | --- | --- |
-| **CUDA** | NVIDIA GPUs (`sm60`–`sm90`+, Driver API >= 12.8) | Yes | Embedded offline fatbins — no CUDA Toolkit or `nvcc` required |
+| **CUDA** | NVIDIA GPUs (`sm70`–`sm120` + `compute_80` PTX, Driver API >= 12.8) | Yes | Embedded offline fatbins (ABI 3, ~0.6–0.8 s on V100 / ~0.9–1.2 s on RTX 2080 Ti) — no CUDA Toolkit or `nvcc` required |
 | **HIP** | AMD Radeon (`gfx1151` / ROCm) | Yes | Embedded HSACO artifacts — no `hipcc` required |
-| **Metal** | Apple Silicon (macOS 13.2+ native / 14+ wheel) | Yes | 8-bit Turbo (~0.8–1.2 s for `mindmap`/`mindsnap` on M-series) & exact fp16 |
-| **CPU** | Apple SME / NEON, x86-64 AVX-512 VNNI / AVX-VNNI / AVX2+FMA | Yes | 8-bit Turbo & bit-exact fp32 across compilers/architectures |
+| **Metal** | Apple Silicon (macOS 13.2+ native / 14+ wheel) | Yes | 8-bit Turbo (~0.8–1.2 s for `mindmap`/`mindsnap` on M-series; `--pve` turbo at ~1.6 GiB) & exact fp16 |
+| **CPU** | Apple SME / NEON (`i8mm` & M1+ `ARMv8.2 SDOT`), x86-64 AVX-512 VNNI / AVX-VNNI / AVX-512F & AVX2+FMA+F16C | Yes | Compact int8/fp16 Turbo (~60% lower RAM) & bit-exact fp32 across compilers/architectures |
 | **OpenCL** | Explicit opt-in (`--backend opencl`) | No | Available via `-backend opencl` when explicitly requested |
+
+**Native CLI runtime highlights (`v1.1.1`, end-to-end wall time on `test/t1_crop.nii.gz`, see [BRAINCHOP_CORE_V111_REPORT.md](BRAINCHOP_CORE_V111_REPORT.md)):**
+
+| Hardware / Backend | `mindgrab` | `mindmap-fast` | `mindmap` | `mindsnap` | `mindmap --pve` | Peak Memory |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| NVIDIA V100-SXM2 (`sm_70`, CUDA) | 0.79 s | 0.63 s | 0.79 s | 0.80 s | 1.99 s | 1.3–1.8 GiB VRAM |
+| NVIDIA RTX 2080 Ti (`sm_75`, CUDA) | 1.12 s | 0.94 s | 1.22 s | 1.25 s | 2.44 s | 1.2–1.7 GiB VRAM |
+| Apple M1 (`Metal` / `ARMv8.2 SDOT` CPU) | — | 8.10 s *(CPU `sdot`)* | — | — | 5.07 s *(Metal turbo)* | 1.0 GiB *(CPU)* / 1.6 GiB *(Metal PVE)* |
+| Intel Xeon Gold 6130 (16t, non-VNNI CPU) | 8.77 s | 7.27 s | 14.78 s | 14.21 s | — | 0.9–1.3 GiB RAM |
 
 **Cross-platform determinism, NIfTI headers & provenance:**
 - Both the default 8-bit activation path (`turbo`) and GPU FP16 paths can differ at a small fraction of boundary voxels across GPU/CPU architectures (typical whole-brain voxel agreement >99.9%). For longitudinal or multi-site studies, pin a single backend across the cohort — or pass `-cpu 0 --no-turbo` for bit-exact FP32 CPU reproducibility across machines.
@@ -193,7 +202,7 @@ Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/RE
 - [Testing, Benchmarks & WebAssembly](docs/testing-and-wasm.md) — verification suites, hardware gates, and browser WASM builds.
 - [PyPI Packaging & Adaptive Hardware Selection](docs/pypi.md) — prebuilt wheels, source-first adaptive rebuilds, and offline installs.
 - [Browser Package Documentation](js/README.md) — WebGPU, WebGL2, and threaded WASM CPU API.
-- [CUDA Offline Modules](docs/cuda-modules.md) | [HIP Artifacts](docs/hip-artifacts.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md)
+- [CUDA Offline Modules](docs/cuda-modules.md) | [HIP Artifacts](docs/hip-artifacts.md) | [v1.1.1 Benchmarks](BRAINCHOP_CORE_V111_REPORT.md) | [Changelog](CHANGELOG.md) | [Contributing](CONTRIBUTING.md) | [Security](SECURITY.md)
 
 ## Citation
 

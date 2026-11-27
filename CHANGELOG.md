@@ -2,6 +2,17 @@
 
 All notable changes to BrainChop Core are documented in this file.
 
+## [1.1.2] - 2026-11-27
+
+Upgrades the embedded `mindmap-fast` model (`model16chan18cls`) to clinical-grade MindMap-16 v4.1 weights with the same 84K-parameter architecture and memory footprint, refreshes validation documentation, and standardizes runtime diagnostic log prefixes to `brainchop-core:`.
+
+### Embedded Model Upgrade
+- **MindMap-16 v4.1 (`mindmap-fast`):** Replaced legacy v3.5 weights with locked MindMap-16 v4.1 (`model.bin` SHA-256 `f6ea86f9...`, `model.safetensors` SHA-256 `cfc06473...`) at identical ~1.3 GiB peak memory and 2.3 s Apple M1 WebGPU runtime. Delivers clinical-cohort dementia morphometry (OASIS-3 AD vs CN hippocampal `%TBVV` AUROC `0.830`, HarP AD vs CN AUROC `0.881`, Mindboggle-101 Shared-11 Dice `0.822`), thick-slice robustness (`0.772` at 5 mm, `+5.75 pp` over v3.5), lower focal-lesion false positives (`40.0%` surgical resection cavity FP rate), and `2.83%` OASIS-TRT-20 scan–rescan AVD. Updated `src/model_weights_sha.h` and frozen CPU fixtures (`test/labels16*.nii.gz`).
+
+### Diagnostics & Documentation
+- **`brainchop-core:` Runtime Log Prefix:** Replaced legacy `brainchopc:` diagnostic, error, tuning, and profiling prefixes with `brainchop-core:` across C/C++/CUDA/HIP/Metal/OpenCL backends, browser WebGPU JS/TS (`@brainchop/core`), and unit/script assertions (preserving `BRAINCHOPC_*` environment variables for backward compatibility).
+- **Documentation & Validation Ledger Alignment:** Refreshed `README.md` with compute backend summaries, `v1.1.1` native runtime highlights, locked-ledger validation metrics (including OASIS-3 and resection-cavity rows across all models), and updated SHA-256 weight provenance; aligned `js/README.md`, `docs/building.md`, and `THIRD_PARTY_NOTICES.md` with actual `mindmap-fast` and `mindsnap` CLI/browser capabilities.
+
 ## [1.1.1] - 2026-11-26
 
 Non-weight-changing accuracy guards and performance upgrades across native C/CUDA/Metal/CPU engines and Browser WebGPU (`@brainchop/core`), preserving 100% weight compatibility with `1.1.0`.

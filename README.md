@@ -196,7 +196,7 @@ Install `@brainchop/core` via npm (`npm install @brainchop/core`) — see [js/RE
   ```text
   brainchop <version> <model>/<sha256[:8]> <backend>[ <mode>]
   ```
-  where `<sha256[:8]>` is the first 8 lowercase hex characters of the shipped `model.bin` SHA-256 digest (matching [Weight Provenance](#weight-provenance-sha-256) above), so outputs uniquely identify both the exact weights and execution backend even when checkpoints are updated between version bumps (e.g., `brainchop 1.1.1 mindmap/58006d19 metal turbo`, `brainchop 1.1.1 mindsnap/995cdb52 cpu exact`, `brainchop 1.1.1 mindmap/58006d19 metal pve`, `brainchop 1.1.1 mindmap/58006d19 webgpu`).
+  where `<sha256[:8]>` is the first 8 lowercase hex characters of the shipped `model.bin` SHA-256 digest (matching [Weight Provenance](#weight-provenance-sha-256) above), so outputs uniquely identify both the exact weights and execution backend even when checkpoints are updated between version bumps (e.g., `brainchop 1.1.2 mindmap/58006d19 metal turbo`, `brainchop 1.1.2 mindsnap/995cdb52 cpu exact`, `brainchop 1.1.2 mindmap/58006d19 metal pve`, `brainchop 1.1.2 mindmap/58006d19 webgpu`).
 - Output `intent_code` follows NIfTI-1 conventions: categorical label volumes (`mindmap`, `mindsnap`, `mindmap-fast`) and `mindgrab --mask` set `NIFTI_INTENT_LABEL` (`1002`); continuous partial-volume maps (`--pve`) and raw `--export-classes` maps set `NIFTI_INTENT_NONE` (`0`); `mindgrab` skull-stripped intensity outputs preserve the input volume's intent and datatype.
 
 ## Documentation

@@ -31,7 +31,7 @@ except PackageNotFoundError:
     from pathlib import Path as _Path
 
     _ver_file = _Path(__file__).resolve().parents[1] / "PYPI_VERSION"
-    __version__ = _ver_file.read_text().strip() if _ver_file.is_file() else "1.1.1"
+    __version__ = _ver_file.read_text().strip() if _ver_file.is_file() else "1.1.2"
 
 __all__ = [
     "__version__",

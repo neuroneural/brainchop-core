@@ -76,8 +76,8 @@ ran in `result.backend`, and throws `no-webgpu` if none are available. Every
 output NIfTI-1 file stamps provenance into its 80-byte `descrip` header as
 `brainchop <version> <model>/<sha256[:8]> <backend>[ <mode>]` (where
 `<sha256[:8]>` is the first 8 hex characters of the `model.bin` SHA-256 digest,
-e.g. `brainchop 1.1.1 mindmap/58006d19 webgpu` or
-`brainchop 1.1.1 mindmap/58006d19 webgpu pve`). Software rasterisers
+e.g. `brainchop 1.1.2 mindmap/58006d19 webgpu` or
+`brainchop 1.1.2 mindmap/58006d19 webgpu pve`). Software rasterisers
 (SwiftShader, llvmpipe, lavapipe, WARP, fallback adapters) are never selected
 automatically.
 

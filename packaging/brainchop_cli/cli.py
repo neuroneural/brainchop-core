@@ -15,7 +15,7 @@ def _package_version() -> str:
         return _dist_version("brainchop")
     except PackageNotFoundError:
         ver_file = Path(__file__).resolve().parents[1] / "PYPI_VERSION"
-        return ver_file.read_text().strip() if ver_file.is_file() else "1.1.1"
+        return ver_file.read_text().strip() if ver_file.is_file() else "1.1.2"
 
 
 def get_parser() -> argparse.ArgumentParser:

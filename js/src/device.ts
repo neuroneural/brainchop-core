@@ -21,6 +21,7 @@ const MODEL_CHANNELS: Record<ModelName, number> = {
   'mindmap-fast': 16,
   '16chan18cls': 16,
   mindmap: 24,
+  'mindmap-omni': 24,
   mindsnap: 24,
 }
 

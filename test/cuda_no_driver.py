@@ -17,7 +17,7 @@ env = dict(os.environ, BC_NUM_THREADS='2')
 if os.name == 'nt':
     env['PATH'] = str(Path(os.environ['SystemRoot']) / 'System32')
 with tempfile.TemporaryDirectory(prefix='bc-no-driver-') as tmp:
-    for model in ('mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'):
+    for model in ('mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'):
         binary = (a.directory / ('brainchop-' + model + suffix)).resolve()
         def run(args):
             return subprocess.run([str(binary), *map(str, args)], cwd=tmp, env=env,

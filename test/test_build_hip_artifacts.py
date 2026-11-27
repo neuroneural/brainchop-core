@@ -82,6 +82,7 @@ class CompilerTests(unittest.TestCase):
             "mindgrab": (15, 25, 2, False, True),
             "model16chan18cls": (16, 13, 18, True, True),
             "mindmap": (24, 13, 18, True, True),
+            "mindmap_omni": (24, 13, 18, True, True),
             "mindsnap": (24, 13, 104, True, True),
         }
         for name, values in expected.items():

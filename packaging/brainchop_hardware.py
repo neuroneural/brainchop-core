@@ -10,7 +10,9 @@ import subprocess
 
 from brainchop_cli.adaptive import cuda_choice, parse_probe
 
-MODELS = ('mindgrab', 'model16chan18cls', 'mindmap', 'mindsnap')
+MODELS = ('mindgrab', 'model16chan18cls', 'mindmap', 'mindmap_omni', 'mindsnap')
+# Offline CUDA fatbins on disk (mindmap_omni shares mindmap.fatbin).
+CUDA_MODULES = ('mindgrab', 'model16chan18cls', 'mindmap', 'mindsnap')
 
 def fatbin_images(blob):
     """Read the pinned CUDA 12.8 container; preserve each image byte for byte.
@@ -102,7 +104,7 @@ def prune(src, hardware):
     cuda=json.loads((src/'cuda_modules/manifest.json').read_text())
     cuda_devices=[d['arch'] for d in hardware['devices'] if d['backend']=='cuda' and d['driver']>=cuda['minimum_driver_api']]
     cuda_targets=[]
-    for model in MODELS:
+    for model in CUDA_MODULES:
         path=src/'cuda_modules'/f'{model}.fatbin'; original=path.read_bytes()
         if hashlib.sha256(original).hexdigest()!=cuda['models'][model]['sha256']:
             raise ValueError('CUDA artifact hash mismatch: '+model)

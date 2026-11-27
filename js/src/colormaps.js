@@ -3,6 +3,7 @@
 import mindgrab from '../../src/models/mindgrab/colormap.json'
 import model16 from '../../src/models/model16chan18cls/colormap.json'
 import mindmap from '../../src/models/mindmap/colormap.json'
+import mindmapOmni from '../../src/models/mindmap_omni/colormap.json'
 import mindsnap from '../../src/models/mindsnap/colormap.json'
 
 export const COLORMAPS = {
@@ -10,5 +11,6 @@ export const COLORMAPS = {
   'mindmap-fast': model16,
   '16chan18cls': model16,
   mindmap,
+  'mindmap-omni': mindmapOmni,
   mindsnap,
 }

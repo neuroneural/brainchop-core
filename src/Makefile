@@ -483,7 +483,7 @@ endif
 # binds that model's generated constants to the generic BC_MODEL_* names. Only
 # the selected model's generated Metal program is compiled, which is where most
 # of the per-model size saving comes from.
-MODELS = mindgrab model16chan18cls mindmap mindsnap
+MODELS = mindgrab model16chan18cls mindmap mindmap_omni mindsnap
 
 # NOT every model in MODELS. scripts/build_cuda_modules.py carries its own
 # hardcoded model list and regenerating a fatbin needs nvcc pinned to a specific
@@ -502,24 +502,42 @@ exe_mindgrab = brainchop-mindgrab$(EXEEXT)
 metal_hdr_mindgrab = metal_mindgrab_generated.h
 metal_sym_mindgrab = mindgrab
 metal_uc_mindgrab = MINDGRAB
+cuda_mod_mindgrab = mindgrab
+hip_mod_mindgrab = mindgrab
 sel_mindgrab = BC_MODEL_IS_MINDGRAB
 
 exe_model16chan18cls = brainchop-mindmap-fast$(EXEEXT)
 metal_hdr_model16chan18cls = metal_model16_generated.h
 metal_sym_model16chan18cls = model16
 metal_uc_model16chan18cls = MODEL16
+cuda_mod_model16chan18cls = model16chan18cls
+hip_mod_model16chan18cls = model16chan18cls
 sel_model16chan18cls = BC_MODEL_IS_MODEL16CHAN18CLS
 
 exe_mindmap = brainchop-mindmap$(EXEEXT)
 metal_hdr_mindmap = metal_mindmap_generated.h
 metal_sym_mindmap = mindmap
 metal_uc_mindmap = MINDMAP
+cuda_mod_mindmap = mindmap
+hip_mod_mindmap = mindmap
 sel_mindmap = BC_MODEL_IS_MINDMAP
+
+# mindmap_omni has the exact 24ch/18cls/13-hidden affine-GN topology as mindmap
+# and reuses its Metal, CUDA, and HIP GPU kernel artifacts with zero bloat.
+exe_mindmap_omni = brainchop-mindmap-omni$(EXEEXT)
+metal_hdr_mindmap_omni = metal_mindmap_generated.h
+metal_sym_mindmap_omni = mindmap
+metal_uc_mindmap_omni = MINDMAP
+cuda_mod_mindmap_omni = mindmap
+hip_mod_mindmap_omni = mindmap
+sel_mindmap_omni = BC_MODEL_IS_MINDMAP_OMNI
 
 exe_mindsnap = brainchop-mindsnap$(EXEEXT)
 metal_hdr_mindsnap = metal_mindsnap_generated.h
 metal_sym_mindsnap = mindsnap
 metal_uc_mindsnap = MINDSNAP
+cuda_mod_mindsnap = mindsnap
+hip_mod_mindsnap = mindsnap
 sel_mindsnap = BC_MODEL_IS_MINDSNAP
 
 # The weight file each executable embeds, and the float count its generated
@@ -537,14 +555,17 @@ floats_mindgrab := $(shell awk '$$2 == "BC_MINDGRAB_WEIGHT_FLOATS" {print $$3; e
 floats_model16chan18cls := $(shell awk '$$2 == "BC_MODEL16_WEIGHT_FLOATS" {print $$3; exit}' models/model16chan18cls/model_def.h)
 bin_mindmap = models/mindmap/model.bin
 floats_mindmap := $(shell awk '$$2 == "BC_MINDMAP_WEIGHT_FLOATS" {print $$3; exit}' models/mindmap/model_def.h)
+bin_mindmap_omni = models/mindmap_omni/model.bin
+floats_mindmap_omni := $(shell awk '$$2 == "BC_MINDMAP_OMNI_WEIGHT_FLOATS" {print $$3; exit}' models/mindmap_omni/model_def.h)
 bin_mindsnap = models/mindsnap/model.bin
 floats_mindsnap := $(shell awk '$$2 == "BC_MINDSNAP_WEIGHT_FLOATS" {print $$3; exit}' models/mindsnap/model_def.h)
 
 # OpenCL's 16-wide ceiling is a per-model fact. CUDA uses a separate,
-# model-specific module/geometry contract and now covers all three models.
+# model-specific module/geometry contract and now covers all embedded models.
 chan_mindgrab := $(shell awk '$$2 == "BC_MINDGRAB_CHAN" {print $$3; exit}' models/mindgrab/model_def.h)
 chan_model16chan18cls := $(shell awk '$$2 == "BC_MODEL16_CHAN" {print $$3; exit}' models/model16chan18cls/model_def.h)
 chan_mindmap := $(shell awk '$$2 == "BC_MINDMAP_CHAN" {print $$3; exit}' models/mindmap/model_def.h)
+chan_mindmap_omni := $(shell awk '$$2 == "BC_MINDMAP_OMNI_CHAN" {print $$3; exit}' models/mindmap_omni/model_def.h)
 chan_mindsnap := $(shell awk '$$2 == "BC_MINDSNAP_CHAN" {print $$3; exit}' models/mindsnap/model_def.h)
 # 1 when the model fits the 16-wide OpenCL backend.
 narrow_model = $(if $(filter 0,$(shell test $(chan_$(1)) -le 16 && echo 0)),1,0)
@@ -1185,7 +1206,7 @@ endif
 # this a third model breaks `make models` on both -- and this machine is macOS,
 # where CUDA defaults to 0 and the break is invisible.
 $(1)_CPPFLAGS :=
-$(1)_HIP_DIR := hip_artifacts/$(1)/$$(HIP_ARCH)
+$(1)_HIP_DIR := hip_artifacts/$$(hip_mod_$(1))/$$(HIP_ARCH)
 $(1)_HIP := $$(if $$(wildcard $$($(1)_HIP_DIR)/catalog.h),1,0)
 ifeq ($$(HIP),1)
 ifeq ($$($(1)_HIP),1)
@@ -1193,7 +1214,7 @@ $(1)_OBJS += build/$(1)/backend_hip_driver.o build/$(1)/hip_kernels.o
 $(1)_CPPFLAGS += -DHAVE_HIP -DBC_HIP_CATALOG_HEADER='"$$($(1)_HIP_DIR)/catalog.h"'
 endif
 endif
-$(1)_CUDA := $$(if $$(filter $(1),$$(CUDA_MODELS)),1,0)
+$(1)_CUDA := $$(if $$(filter $$(cuda_mod_$(1)),$$(CUDA_MODELS)),1,0)
 ifeq ($$(CUDA),driver)
 ifeq ($$($(1)_CUDA),1)
 $(1)_OBJS += build/$(1)/backend_cuda_driver.o build/$(1)/cuda_module.o
@@ -1249,8 +1270,8 @@ build/$(1)/payload.o: payload.S $$(bin_$(1)) | build/$(1)
 	$$(CC) -I. -DBC_PAYLOAD_PATH='"$$(bin_$(1))"' \
 		-DBC_PAYLOAD_SYM=bc_model_payload -c $$< -o $$@
 
-build/$(1)/cuda_module.o: payload.S cuda_modules/$(1).fatbin | build/$(1)
-	$$(CC) -I. -DBC_PAYLOAD_PATH='"cuda_modules/$(1).fatbin"' \
+build/$(1)/cuda_module.o: payload.S cuda_modules/$$(cuda_mod_$(1)).fatbin | build/$(1)
+	$$(CC) -I. -DBC_PAYLOAD_PATH='"cuda_modules/$$(cuda_mod_$(1)).fatbin"' \
 		-DBC_PAYLOAD_SYM=bc_cuda_module -c $$< -o $$@
 
 build/$(1)/hip_kernels.o: payload.S $$($(1)_HIP_DIR)/kernels.bin | build/$(1)
@@ -1626,13 +1647,16 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	python3 ../test/nii_diff.py $(TEST_MS_NATIVE) $(BC_TMP)/bc-ms-native-test.nii.gz 0
 	./$(exe_mindsnap) -cpu 5 --no-turbo --save-conform -o $(BC_TMP)/bc-ms-threads.nii.gz $(TEST_IN)
 	python3 -c 'import gzip; assert gzip.open("$(BC_TMP)/bc-ms-threads.nii.gz","rb").read() == gzip.open("$(BC_TMP)/bc-ms-conf-test.nii.gz","rb").read(), "mindsnap output depends on the thread count"'
-	# Provenance stamped into NIfTI-1 descrip header across all four models,
+	./$(exe_mindmap_omni) -cpu 0 --no-turbo -o $(BC_TMP)/bc-mmo-native-test.nii.gz $(TEST_2MM)
+	python3 -c 'import gzip, struct; b=gzip.open("$(BC_TMP)/bc-mmo-native-test.nii.gz","rb").read(); i=gzip.open("$(TEST_2MM)","rb").read(); assert struct.unpack_from("<3h",b,42)==struct.unpack_from("<3h",i,42); assert struct.unpack_from("<hh",b,68)==(1002,2); vals=set(b[352:]); assert len(vals)>=10 and max(vals)<=17, f"unexpected mindmap-omni labels: {sorted(vals)}"'
+	# Provenance stamped into NIfTI-1 descrip header across all five models,
 	# including the 8-hex-char SHA-256 prefix of each embedded model.bin.
 	python3 -c 'import hashlib, pathlib, sys; sys.path.insert(0, "../test"); import nii_diff; \
 		sha8 = lambda m: hashlib.sha256(pathlib.Path("models/" + m + "/model.bin").read_bytes()).hexdigest()[:8]; \
 		checks = [("$(BC_TMP)/bc-mg-test.nii.gz", "mindgrab/" + sha8("mindgrab") + " cpu exact"), \
 			("$(BC_TMP)/bc-m16-conf-test.nii.gz", "mindmap-fast/" + sha8("model16chan18cls") + " cpu exact"), \
 			("$(BC_TMP)/bc-mm-conf-test.nii.gz", "mindmap/" + sha8("mindmap") + " cpu exact"), \
+			("$(BC_TMP)/bc-mmo-native-test.nii.gz", "mindmap-omni/" + sha8("mindmap_omni") + " cpu exact"), \
 			("$(BC_TMP)/bc-ms-conf-test.nii.gz", "mindsnap/" + sha8("mindsnap") + " cpu exact")]; \
 		bad = [(p, nii_diff.descrip(nii_diff.read(p)), t) for p, t in checks \
 			if not (nii_diff.descrip(nii_diff.read(p)).startswith("brainchop ") \
@@ -1649,6 +1673,8 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	! ./$(exe_model16chan18cls) --border 5 -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_model16chan18cls) --pve -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	./$(exe_model16chan18cls) --pve $(TEST_IN) 2>&1 | grep -q "supported only for mindmap"
+	! ./$(exe_mindmap_omni) --pve -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
+	! ./$(exe_mindmap_omni) --crop -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_mindsnap) --pve -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_mindsnap) --crop -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
 	! ./$(exe_mindgrab) --custom $(BC_TMP) -o $(BC_TMP)/bc-absent.nii.gz $(TEST_IN)
@@ -1659,6 +1685,7 @@ test-models: models $(TEST_MG) $(TEST_M16) $(TEST_M16_NATIVE) $(TEST_MM) $(TEST_
 	./$(exe_mindgrab) --help | python3 -c 'import sys; t=sys.stdin.read(); assert "--mask" in t and "--border" in t and "--crop" in t, "mindgrab help omits an option it supports"; assert "--save-conform" not in t and "--model" not in t and "--list" not in t and "--legacy-cleanup" not in t, "mindgrab help advertises an option it does not have"'
 	./$(exe_model16chan18cls) --help | python3 -c 'import sys; t=sys.stdin.read(); assert "--save-conform" in t and "--legacy-cleanup" in t, "model16 help omits an option it supports"; assert "--mask" not in t and "--border" not in t and "--crop" not in t and "--model" not in t and "--pve" not in t, "model16 help advertises an option it does not have"'
 	./$(exe_mindmap) --help | python3 -c 'import sys; t=sys.stdin.read(); assert "--pve" in t and "--legacy-cleanup" in t, "MindMap help omits an option it supports"'
+	./$(exe_mindmap_omni) --help | python3 -c 'import sys; t=sys.stdin.read(); assert "--save-conform" in t and "--legacy-cleanup" in t, "mindmap-omni help omits an option it supports"; assert "--pve" not in t and "--crop" not in t and "--mask" not in t, "mindmap-omni help advertises an option it does not have"'
 	./$(exe_mindsnap) --help | python3 -c 'import sys; t=sys.stdin.read(); assert "--save-conform" in t and "--legacy-cleanup" in t, "mindsnap help omits an option it supports"; assert "--pve" not in t and "--crop" not in t, "mindsnap help advertises an option it does not have"'
 
 # Link a test harness against model $(1)'s objects, minus its main().
@@ -2109,7 +2136,7 @@ print-release-exes:
 native-package:
 ifeq ($(CUDA),driver)
 	$(MAKE) OPENCL=0 WINDOWS_STATIC=1 ZSTD=0 models dispatcher cuda-modules-check
-	python3 ../scripts/package_native.py --src . --output ../dist --version "$(VERSION)" --dispatcher "$(DISPATCHER_EXE)" $(foreach m,$(CUDA_MODELS),$(exe_$(m)))
+	python3 ../scripts/package_native.py --src . --output ../dist --version "$(VERSION)" --dispatcher "$(DISPATCHER_EXE)" $(foreach m,$(MODELS),$(if $(filter $(cuda_mod_$(m)),$(CUDA_MODELS)),$(exe_$(m))))
 else
 	@echo "native-package requires the default Linux/Windows CUDA=driver build" >&2
 	@exit 1

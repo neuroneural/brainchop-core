@@ -58,24 +58,24 @@ def main():
     entry_points = importlib.metadata.distribution('brainchop').entry_points
     assert {e.name for e in entry_points if e.group == 'console_scripts'} == {
         'brainchop', 'brainchop-mindgrab', 'brainchop-mindmap-fast',
-        'brainchop-mindmap', 'brainchop-mindsnap'}
+        'brainchop-mindmap', 'brainchop-mindmap-omni', 'brainchop-mindsnap'}
     version_header = (Path(__file__).resolve().parents[1] / 'src' / 'version.h').read_text()
     bc_version = next(
         (line.split('"')[1] for line in version_header.splitlines() if '#define BC_VERSION ' in line),
         '1.0.0',
     )
     listing = run('--list').stdout
-    for model in ('mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'):
+    for model in ('mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'):
         assert model in listing
         executable = scripts / ('brainchop-' + model + suffix)
         help_result = subprocess.run([str(executable), '--help'], capture_output=True, text=True)
         assert help_result.returncode == 0 and f'v{bc_version}' in help_result.stdout, help_result.stdout
         assert 'usage: brainchop-'+model in help_result.stdout
     import brainchop as bc_api
-    assert set(bc_api.list_models()) == {'mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'}
+    assert set(bc_api.list_models()) == {'mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'}
     assert run('missing.nii.gz', '-m', 'tissue_fast', check=False).returncode == 2
     assert run('missing.nii.gz', check=False).returncode == 2
-    print('PASS: installed console command, four binaries, model listing, error exits, no runtime dependencies', flush=True)
+    print('PASS: installed console command, five binaries, model listing, error exits, no runtime dependencies', flush=True)
     if args.smoke_only:
         return
 

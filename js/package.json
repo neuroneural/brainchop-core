@@ -40,6 +40,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/mindmap.js"
     },
+    "./mindmap-omni": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/mindmap-omni.js"
+    },
     "./mindsnap": {
       "types": "./dist/index.d.ts",
       "import": "./dist/mindsnap.js"

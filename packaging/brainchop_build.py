@@ -27,7 +27,7 @@ ROOT=Path(__file__).resolve().parents[1]
 VERSION=(ROOT/'packaging/PYPI_VERSION').read_text().strip()
 DIST='brainchop-'+VERSION
 INFO=DIST+'.dist-info'
-EXES=('mindgrab','mindmap-fast','mindmap','mindsnap')
+EXES=('mindgrab','mindmap-fast','mindmap','mindmap-omni','mindsnap')
 
 def get_requires_for_build_wheel(config_settings=None): return []
 def get_requires_for_build_sdist(config_settings=None): return []
@@ -35,13 +35,13 @@ def get_requires_for_build_sdist(config_settings=None): return []
 def metadata():
     readme = ROOT / 'README.md'
     body = readme.read_text(encoding='utf-8') if readme.is_file() else (
-        'Native brain segmentation and skull stripping with four embedded models.\n'
+        'Native brain segmentation and skull stripping with five embedded models.\n'
     )
     return (
         'Metadata-Version: 2.2\n'
         'Name: brainchop\n'
         f'Version: {VERSION}\n'
-        'Summary: Fast, zero-dependency native brain segmentation and skull stripping with four embedded models\n'
+        'Summary: Fast, zero-dependency native brain segmentation and skull stripping with five embedded models\n'
         'Requires-Python: >=3.9\n'
         'License: MIT\n'
         'Keywords: brainchop,neuroimaging,mri,nifti,segmentation,skull-stripping,meshnet\n'
@@ -64,7 +64,7 @@ def metadata():
 
 def entry_points():
     names=['brainchop = brainchop_cli.cli:main']
-    names += [f'brainchop-{model} = brainchop_cli.launch:main' for model in ('mindgrab','mindmap-fast','mindmap','mindsnap')]
+    names += [f'brainchop-{model} = brainchop_cli.launch:main' for model in EXES]
     return '[console_scripts]\n'+'\n'.join(names)+'\n'
 
 def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):

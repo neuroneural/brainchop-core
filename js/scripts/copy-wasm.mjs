@@ -29,8 +29,8 @@ if (process.env.BC_SKIP_VERSION_CHECK !== '1') {
   }
 }
 
-// WebGL2 (`-gl`) and threaded CPU (`''`) fallback modules for all 4 models.
-const MODELS = ['mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap']
+// WebGL2 (`-gl`) and threaded CPU (`''`) fallback modules for all 5 models.
+const MODELS = ['mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap']
 const files = ['-gl', ''].flatMap((b) => MODELS.flatMap((m) =>
   ['.js', '.wasm'].map((e) => `brainchop-${m}${b}${e}`)))
 

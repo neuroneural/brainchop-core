@@ -41,9 +41,10 @@ for (const f of [
   'mindmap-fast.js', 'worker-mindmap-fast.js',
   '16chan18cls.js', 'worker-16chan18cls.js',
   'mindmap.js', 'worker-mindmap.js',
+  'mindmap-omni.js', 'worker-mindmap-omni.js',
   'mindsnap.js', 'worker-mindsnap.js',
   'models/mindgrab.bin', 'models/mindmap-fast.bin',
-  'models/mindmap.bin', 'models/mindsnap.bin',
+  'models/mindmap.bin', 'models/mindmap-omni.bin', 'models/mindsnap.bin',
 ]) {
   const src = join(dist, f)
   if (!existsSync(src)) {

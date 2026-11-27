@@ -34,20 +34,21 @@ const { image, backend, elapsedMs } = await segment(input, {
 | `model` | Description | Output |
 | --- | --- | --- |
 | `'mindgrab'` | Modality-agnostic skull stripping (T1, T2, FLAIR, DWI, CT, etc.) | input image with non-brain voxels floored (optional binary `mask`) |
-| `'mindmap'` | Primary 18-class cortical and subcortical segmentation | label volume (or tissue fractions via `segmentTissues`) |
+| `'mindmap'` | Primary 18-class cortical and subcortical segmentation (3D T1w) | label volume (or tissue fractions via `segmentTissues`) |
+| `'mindmap-omni'` | Contrast-agnostic 18-class segmentation (T2w, FLAIR, T1w, PDw, ULF 64 mT, FDG-PET) | label volume |
 | `'mindsnap'` | 104-class Desikan-Killiany cortical + subcortical parcellation | label volume |
 | `'mindmap-fast'` | Fast lightweight 18-class cortical and subcortical segmentation (`'16chan18cls'` alias) | label volume |
 
 Each `MODELS` entry (and `listModels()`) carries `colormap`: `{ R, G, B, labels }`,
 ready for viewers such as NiiVue.
 
-`mindmap`, `mindmap-fast`, and `mindsnap` apply class-aware connected-component
-cleanup with neighboring-label refill by default. Pass `{ legacyCleanup: true }`
-for the original whole-brain-only 26-connected cleanup. Categorical outputs
-reslice to the native input grid via midpoint majority voting; masks use
-nearest-neighbor resampling; continuous tissue maps use trilinear resampling.
-Invalid, empty, or severely fragmented categorical outputs fail explicitly with
-`inference-failed`.
+`mindmap`, `mindmap-omni`, `mindmap-fast`, and `mindsnap` apply class-aware
+connected-component cleanup with neighboring-label refill by default. Pass
+`{ legacyCleanup: true }` for the original whole-brain-only 26-connected
+cleanup. Categorical outputs reslice to the native input grid via midpoint
+majority voting; masks use nearest-neighbor resampling; continuous tissue maps
+use trilinear resampling. Invalid, empty, or severely fragmented categorical
+outputs fail explicitly with `inference-failed`.
 
 ## Continuous tissue maps (experimental)
 
@@ -63,8 +64,9 @@ const { tissues, backend } = await segmentTissues(input, {
 ```
 
 `segmentTissues` computes experimental GM/WM/CSF/Brain partial-volume tissue
-fractions from `mindmap` across WebGPU, WebGL2, and CPU (`mindmap-fast` /
-`'16chan18cls'`, `mindsnap`, and `mindgrab` do not support `segmentTissues`).
+fractions from `mindmap` across WebGPU, WebGL2, and CPU (`mindmap-omni`,
+`mindmap-fast` / `'16chan18cls'`, `mindsnap`, and `mindgrab` do not support
+`segmentTissues`).
 `saveConform`, `gzipOutput`, `onProgress`, and `webgpuMode` work as for
 `segment`; mask, border, and legacy categorical cleanup options are refused.
 
@@ -140,7 +142,7 @@ segment(input: ArrayBuffer | ArrayBufferView, options: SegmentOptions)
 
 | Option | Models | Meaning |
 | --- | --- | --- |
-| `model` | all | **required**: `'mindgrab'`, `'mindmap'`, `'mindsnap'`, `'mindmap-fast'` (or alias `'16chan18cls'`) |
+| `model` | all | **required**: `'mindgrab'`, `'mindmap'`, `'mindmap-omni'`, `'mindsnap'`, `'mindmap-fast'` (or alias `'16chan18cls'`) |
 | `ct` | all | input is CT; convert Hounsfield to Cormack units |
 | `comply` | all | insert the compliance transform before conform |
 | `saveConform` | label/PVE models | return the conformed 256³ volume instead of reslicing to the input grid |
@@ -176,7 +178,7 @@ export default {
 To deploy only one model's assets, import its subpath entrypoint:
 
 ```js
-import { segment } from '@brainchop/core/mindgrab'      // or /mindmap, /mindsnap, /mindmap-fast, /16chan18cls
+import { segment } from '@brainchop/core/mindgrab'      // or /mindmap, /mindmap-omni, /mindsnap, /mindmap-fast, /16chan18cls
 ```
 
 ## Errors

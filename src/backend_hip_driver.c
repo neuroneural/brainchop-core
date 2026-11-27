@@ -277,18 +277,20 @@ static int profile_valid(void) {
 	const uint64_t voxels = (uint64_t)BRAINCHOP_MODEL_DIM *
 		BRAINCHOP_MODEL_DIM * BRAINCHOP_MODEL_DIM;
 	size_t bundle_size = (size_t)(bc_hip_kernels_end - bc_hip_kernels_begin);
-	if (strcmp(profile->model, BC_MODEL_NAME) ||
+	int model_match = !strcmp(profile->model, BC_MODEL_NAME) ||
+		(!strcmp(BC_MODEL_NAME, "mindmap_omni") && !strcmp(profile->model, "mindmap"));
+	if (!model_match ||
 		profile->dimension != BRAINCHOP_MODEL_DIM ||
 		profile->channels != BC_MODEL_CHAN ||
 		profile->hidden_layers != BC_MODEL_NHIDDEN ||
 		profile->classes != BC_MODEL_NCLASS ||
 		profile->has_affine != BC_MODEL_HAS_AFFINE ||
 		profile->classifier_bias != BC_MODEL_CLASSIFIER_BIAS ||
-		profile->supports_pve != BC_HAS_PVE ||
+		(BC_HAS_PVE && !profile->supports_pve) ||
 		profile->input_bytes != voxels * sizeof(uint16_t) ||
-		profile->output_bytes != (BC_HAS_PVE ?
+		profile->output_bytes != (profile->supports_pve ?
 			voxels * BC_PRIOR_PLANES * sizeof(float) : voxels) ||
-		profile->pve_output_bytes != (BC_HAS_PVE ?
+		profile->pve_output_bytes != (profile->supports_pve ?
 			voxels * BC_PRIOR_PLANES * sizeof(float) : 0) ||
 		profile->arena_bytes > SIZE_MAX)
 		return 0;

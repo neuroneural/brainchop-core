@@ -1,6 +1,6 @@
 """Compatibility adapter for brainchop-core's embedded model executables.
 
-Only the four embedded checkpoints are supported. Legacy names with different
+Only the five embedded checkpoints are supported. Legacy names with different
 weights are rejected rather than mapped to a different checkpoint.
 """
 
@@ -15,11 +15,16 @@ import subprocess
 NATIVE_MODELS = {
     "mindgrab": "Skull stripping in any modality (native)",
     "mindmap": "18-class cortical and subcortical segmentation (native, default)",
+    "mindmap-omni": "Contrast-agnostic 18-class segmentation: T2w, FLAIR, T1w, ULF, PET (native)",
     "mindsnap": "104-class Desikan-Killiany cortical and subcortical parcellation (native)",
     "mindmap-fast": "Fast lightweight 18-class segmentation (native)",
 }
-MODEL_ALIASES = {"16chan18cls": "mindmap-fast", "model16chan18cls": "mindmap-fast"}
-CLASS_COUNTS = {"mindgrab": 2, "mindmap-fast": 18, "mindmap": 18, "mindsnap": 104}
+MODEL_ALIASES = {
+    "16chan18cls": "mindmap-fast",
+    "model16chan18cls": "mindmap-fast",
+    "mindmap_omni": "mindmap-omni",
+}
+CLASS_COUNTS = {"mindgrab": 2, "mindmap-fast": 18, "mindmap": 18, "mindmap-omni": 18, "mindsnap": 104}
 _LEGACY_HINTS = {
     "subcortical": "Try 'mindmap' (18-class) or 'mindmap-fast' (fast lightweight).",
     "subcortical_mini": "Try 'mindmap-fast' (fast lightweight 18-class).",
@@ -35,7 +40,7 @@ def unknown_model_message(model_name):
     extra = f" {hint}" if hint else ""
     return (
         f"{model_name!r} is unavailable in this native release; "
-        f"select mindgrab, mindmap-fast, mindmap or mindsnap.{extra} "
+        f"select mindgrab, mindmap-fast, mindmap, mindmap-omni or mindsnap.{extra} "
         "Use brainchop==0.2.5 if you need the retired Python models."
     )
 

@@ -16,6 +16,7 @@ const MAP = [
   ['mindgrab', 'mindgrab'],
   ['model16chan18cls', 'mindmap-fast'],
   ['mindmap', 'mindmap'],
+  ['mindmap_omni', 'mindmap-omni'],
   ['mindsnap', 'mindsnap'],
 ]
 

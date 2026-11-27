@@ -3,9 +3,10 @@ brainchop-core: Linux / Windows command-line distribution
 Each model executable contains its embedded weights and CUDA kernels. Extract
 the archive and run `brainchop` (unified dispatcher) or a model executable
 directly (`brainchop-mindgrab`, `brainchop-mindmap-fast`, `brainchop-mindmap`,
-or `brainchop-mindsnap`, with `.exe` on Windows):
+`brainchop-mindmap-omni`, or `brainchop-mindsnap`, with `.exe` on Windows):
 
   brainchop -o labels.nii.gz input.nii.gz
+  brainchop -m mindmap-omni -o labels_omni.nii.gz flair.nii.gz
   brainchop -m mindgrab -o stripped.nii.gz input.nii.gz
   brainchop-mindmap --pve -o brain.nii.gz input.nii.gz
   brainchop-mindsnap -o parcels.nii.gz input.nii.gz

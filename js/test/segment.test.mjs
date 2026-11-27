@@ -73,14 +73,15 @@ const BACKENDS = (process.env.BC_TEST_BACKENDS || 'webgpu,webgl2,cpu').split(','
 const stageFiles = [
   'index.js', 'worker.js', 'mindgrab.js', 'worker-mindgrab.js',
   'mindmap-fast.js', 'worker-mindmap-fast.js', '16chan18cls.js', 'worker-16chan18cls.js',
-  'mindmap.js', 'worker-mindmap.js', 'mindsnap.js', 'worker-mindsnap.js',
-  ...['mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'].map((m) => join('models', `${m}.bin`)),
+  'mindmap.js', 'worker-mindmap.js', 'mindmap-omni.js', 'worker-mindmap-omni.js',
+  'mindsnap.js', 'worker-mindsnap.js',
+  ...['mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'].map((m) => join('models', `${m}.bin`)),
   ...(BACKENDS.includes('webgl2')
-    ? ['mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'].flatMap((m) =>
+    ? ['mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'].flatMap((m) =>
         ['.js', '.wasm'].map((e) => `brainchop-${m}-gl${e}`))
     : []),
   ...(BACKENDS.includes('cpu')
-    ? ['mindgrab', 'mindmap-fast', 'mindmap', 'mindsnap'].flatMap((m) =>
+    ? ['mindgrab', 'mindmap-fast', 'mindmap', 'mindmap-omni', 'mindsnap'].flatMap((m) =>
         ['.js', '.wasm'].map((e) => `brainchop-${m}${e}`))
     : []),
 ]

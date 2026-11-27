@@ -79,6 +79,26 @@ _Static_assert(BC_MODEL_HAS_AFFINE == 1,
 _Static_assert(BC_CHAN_STRIDE == 24, "mindmap must stride activations by 24");
 #endif
 
+#if BC_MODEL_IS_MINDMAP_OMNI
+_Static_assert(BC_MINDMAP_OMNI_W_CONV3D_0_GN_KERNEL_OFF == 0,
+	"first layer must start at offset zero");
+_Static_assert(BC_MINDMAP_OMNI_W_CONV3D_1_GN_KERNEL_OFF ==
+		BC_MINDMAP_OMNI_W_CONV3D_0_GN_KERNEL_LEN +
+		BC_MINDMAP_OMNI_W_AFFINE_0_KERNEL_LEN + BC_MINDMAP_OMNI_W_AFFINE_0_BIAS_LEN,
+	"mindmap_omni layer stride disagrees with the model.json manifest");
+_Static_assert(BC_MINDMAP_OMNI_W_AFFINE_0_KERNEL_LEN == BC_MODEL_CHAN * BC_MODEL_CHAN,
+	"affine is not a full CHAN x CHAN matrix");
+_Static_assert(BC_MINDMAP_OMNI_W_CONV3D_FINAL_KERNEL_LEN ==
+		BC_MODEL_CHAN * BC_MODEL_NCLASS,
+	"classifier kernel size disagrees with the model.json manifest");
+_Static_assert(BC_MINDMAP_OMNI_W_CONV3D_FINAL_BIAS_OFF +
+		BC_MINDMAP_OMNI_W_CONV3D_FINAL_BIAS_LEN == BC_MODEL_WEIGHT_FLOATS,
+	"weights do not end with the classifier bias");
+_Static_assert(BC_MODEL_HAS_AFFINE == 1,
+	"mindmap_omni is expected to carry a post-GroupNorm affine");
+_Static_assert(BC_CHAN_STRIDE == 24, "mindmap_omni must stride activations by 24");
+#endif
+
 #if BC_MODEL_IS_MINDSNAP
 _Static_assert(BC_MINDSNAP_W_CONV3D_0_GN_KERNEL_OFF == 0,
 	"first layer must start at offset zero");

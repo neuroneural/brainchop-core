@@ -37,6 +37,19 @@ def _legacy_evolved_source(name):
     }
 
 
+# Checked-in gfx1151 bundles compiled with ROCm 7.2.2 against v1.0.0 prior
+# masks remain valid for label inference; backend_hip_driver.c gates --pve
+# on BC_HIP_PVE_REVISION until gfx1151 PVE support is rebuilt on ROCm.
+_PRE_V111_PINNED_SOURCES = {
+    "scripts/hip_artifacts.py":
+        "325fc3973fbb4ea90fe5aa1ddcab31cdeee69e1f445d853b76c1af7bfbfff951",
+    "src/pve_constants.h":
+        "2bcbd8fceab885aba4b04cf0f61a4c878d6c5cab45422157af94e4e090d5ac4c",
+    "scripts/hip_tissue_priors.hip":
+        "7fad23fb52ac39de8b4cbf7c76f221d7bcbf2e0f175043559800f36119b59661",
+}
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -331,8 +344,10 @@ def verify(directory, source_root=None):
             data = (source_root / path).read_bytes()
         except OSError as error:
             raise ValueError(f"missing artifact source: {name}") from error
-        if digest(data) != value and not (schema == 1 and
-                                         _legacy_evolved_source(name)):
+        if digest(data) != value and not (
+            (schema == 1 and _legacy_evolved_source(name)) or
+            _PRE_V111_PINNED_SOURCES.get(name) == value
+        ):
             raise ValueError(f"stale artifact source: {name}")
 
     bundle = _keys(manifest["bundle"], ("file", "size", "sha256"), (), "bundle")

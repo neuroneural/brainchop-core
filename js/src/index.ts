@@ -10,7 +10,7 @@ import { gunzip, gzip, isGzip } from './gzip.js'
 import { assetUrl, CPU_TIMEOUT_MS, run } from './run.js'
 import { MODEL_BINS, MODULES } from './modules.js'
 import { COLORMAPS } from './colormaps.js'
-import { runWebGpuSegment, runWebGpuTissues } from './webgpu/pipeline.js'
+import { runWebGpuSegment, runWebGpuTissues, disposeWebGpuResources } from './webgpu/pipeline.js'
 import type {
   Backend, ModelInfo, ModelName, SegmentOptions, SegmentResult, TissueOptions, TissueResult, TissueMaps,
 } from './types.js'
@@ -180,11 +180,55 @@ function buildArgs(options: SegmentOptions): { args: string[]; maskPath?: string
   return { args, maskPath }
 }
 
+const WORKER_IDLE_MS = 120_000
+
+interface PersistentWorkerEntry {
+  key: string
+  worker: Worker
+  idleTimer: ReturnType<typeof setTimeout> | null
+}
+
+let singletonWorker: PersistentWorkerEntry | null = null
+let workerQueue: Promise<unknown> = Promise.resolve()
+
+function terminateSingletonWorker(): void {
+  const entry = singletonWorker
+  singletonWorker = null
+  if (!entry) return
+  if (entry.idleTimer !== null) clearTimeout(entry.idleTimer)
+  entry.worker.onmessage = null
+  entry.worker.onerror = null
+  entry.worker.onmessageerror = null
+  try { entry.worker.terminate() } catch { /* ignore */ }
+}
+
+function scheduleWorkerIdleDispose(entry: PersistentWorkerEntry): void {
+  if (entry.idleTimer !== null) clearTimeout(entry.idleTimer)
+  const timer = setTimeout(() => {
+    if (singletonWorker === entry) terminateSingletonWorker()
+  }, WORKER_IDLE_MS)
+  if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+    ;(timer as unknown as { unref: () => void }).unref()
+  }
+  entry.idleTimer = timer
+}
+
 /**
- * Run one segmentation in a Web Worker.
+ * Explicitly terminate the persistent segmentation worker and release any
+ * pooled WebGPU device/workspace buffers retained across warm calls.
+ */
+export function disposeWorker(): void {
+  terminateSingletonWorker()
+  disposeWebGpuResources()
+}
+
+/**
+ * Run one segmentation in a lazily created persistent Web Worker.
  *
- * The worker is created per call and terminated afterwards so GPU/WASM memory
- * is released deterministically and `timeoutMs` performs real cancellation.
+ * Reusing the worker preserves its WebGPU device, compiled WGSL pipelines,
+ * parsed/packed weights, and pooled GPU workspace across warm calls. On timeout
+ * or worker crash the worker is terminated immediately so cancellation is real;
+ * an unref'd idle timer and `disposeWorker()` handle deterministic cleanup.
  */
 async function runInWorker(
   input: Uint8Array,
@@ -195,45 +239,87 @@ async function runInWorker(
     throw new BrainchopError('unsupported-option',
       'this environment has no Worker; run with worker: false')
 
-  const worker = options.assetPath
-    ? new Worker(assetUrl(__BC_WORKER__, options.assetPath), { type: 'module' })
-    : new Worker(new URL(__BC_WORKER__, import.meta.url), { type: 'module' })
-  const { device, glContext, onLog, onProgress, worker: _w, ...rest } = options
-  void device; void glContext; void _w
+  const workerEntryName = typeof __BC_WORKER__ === 'string' ? __BC_WORKER__ : './worker.js'
+  const workerUrl = options.assetPath
+    ? assetUrl(workerEntryName, options.assetPath)
+    : new URL(workerEntryName, import.meta.url)
+  const workerKey = typeof workerUrl === 'string' ? workerUrl : workerUrl.href
 
-  if (rest.assetPath !== undefined) rest.assetPath = assetUrl('', rest.assetPath)
+  const executeJob = async (): Promise<{
+    image: ArrayBuffer; mask?: ArrayBuffer; tissues?: TissueMaps; elapsedMs: number; backend: Backend
+  }> => {
+    if (singletonWorker && singletonWorker.key !== workerKey) {
+      terminateSingletonWorker()
+    }
+    if (!singletonWorker) {
+      const worker = new Worker(workerUrl, { type: 'module' })
+      singletonWorker = { key: workerKey, worker, idleTimer: null }
+    }
+    const entry = singletonWorker
+    if (entry.idleTimer !== null) {
+      clearTimeout(entry.idleTimer)
+      entry.idleTimer = null
+    }
+    const { worker } = entry
+    const { device, glContext, onLog, onProgress, worker: _w, ...rest } = options
+    void device; void glContext; void _w
 
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await new Promise((resolve, reject) => {
-      worker.onmessage = (event) => {
-        const message = event.data
-        if (message.type === 'log') { onLog?.(message.line); return }
-        if (message.type === 'progress') { onProgress?.(message.event); return }
-        if (message.type === 'done') {
-          resolve({
-            image: message.image, mask: message.mask, tissues: message.tissues,
-            elapsedMs: message.elapsedMs, backend: message.backend,
-          })
-          return
+    if (rest.assetPath !== undefined) rest.assetPath = assetUrl('', rest.assetPath)
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let hardReset = false
+    try {
+      return await new Promise((resolve, reject) => {
+        worker.onmessage = (event) => {
+          const message = event.data
+          if (message.type === 'log') { onLog?.(message.line); return }
+          if (message.type === 'progress') { onProgress?.(message.event); return }
+          if (message.type === 'done') {
+            resolve({
+              image: message.image, mask: message.mask, tissues: message.tissues,
+              elapsedMs: message.elapsedMs, backend: message.backend,
+            })
+            return
+          }
+          reject(new BrainchopError(message.code, message.message, message.log))
         }
-        reject(new BrainchopError(message.code, message.message, message.log))
-      }
-      worker.onerror = (event) => reject(new BrainchopError('inference-failed',
-        `the segmentation worker failed to start or threw: ${event.message ?? 'unknown'}`))
-      worker.onmessageerror = () => reject(new BrainchopError('inference-failed',
-        'the segmentation worker sent a message that could not be deserialized'))
+        worker.onerror = (event) => {
+          hardReset = true
+          reject(new BrainchopError('inference-failed',
+            `the segmentation worker failed to start or threw: ${event.message ?? 'unknown'}`))
+        }
+        worker.onmessageerror = () => {
+          hardReset = true
+          reject(new BrainchopError('inference-failed',
+            'the segmentation worker sent a message that could not be deserialized'))
+        }
 
-      const named = options.backend && options.backend !== 'auto' ? options.backend : null
-      const limit = options.timeoutMs ?? (named && named !== 'cpu' ? 120_000 : CPU_TIMEOUT_MS)
-      timer = setTimeout(() => reject(new BrainchopError('inference-failed',
-        `the segmentation did not finish within ${limit} ms`)), limit)
-      worker.postMessage({ input, options: rest, tissueMode })
-    })
-  } finally {
-    clearTimeout(timer)
-    worker.terminate()
+        const named = options.backend && options.backend !== 'auto' ? options.backend : null
+        const limit = options.timeoutMs ?? (named && named !== 'cpu' ? 120_000 : CPU_TIMEOUT_MS)
+        timer = setTimeout(() => {
+          hardReset = true
+          reject(new BrainchopError('inference-failed',
+            `the segmentation did not finish within ${limit} ms`))
+        }, limit)
+        worker.postMessage({ input, options: rest, tissueMode })
+      })
+    } finally {
+      clearTimeout(timer)
+      if (hardReset) {
+        if (singletonWorker === entry) terminateSingletonWorker()
+        else { try { worker.terminate() } catch { /* ignore */ } }
+      } else if (singletonWorker === entry) {
+        worker.onmessage = null
+        worker.onerror = null
+        worker.onmessageerror = null
+        scheduleWorkerIdleDispose(entry)
+      }
+    }
   }
+
+  const run = workerQueue.then(executeJob, executeJob)
+  workerQueue = run.then(() => {}, () => {})
+  return run
 }
 
 /**
@@ -362,8 +448,8 @@ async function segmentInternal(
   const { args, maskPath } = buildArgs(options)
   if (tissueMode) {
     const canonical = canonicalModelName(options.model)
-    if ((canonical !== 'mindmap' && canonical !== 'mindmap-fast') || options.mask || options.borderMm || options.legacyCleanup)
-      reject(options.model, 'tissue fractions', 'requires an 18-class model without mask or categorical cleanup options')
+    if (canonical !== 'mindmap' || options.mask || options.borderMm || options.legacyCleanup)
+      reject(options.model, 'tissue fractions', 'partial-volume tissue fractions are supported only for mindmap without mask or categorical cleanup options')
     args.push('--pve')
   }
 
@@ -392,6 +478,13 @@ async function segmentInternal(
 
   const pack = async (data: Uint8Array): Promise<ArrayBuffer> => {
     const out = wantGzip ? await gzip(data) : data
+    if (
+      out.byteOffset === 0 &&
+      out.byteLength === out.buffer.byteLength &&
+      (typeof SharedArrayBuffer === 'undefined' || !(out.buffer instanceof SharedArrayBuffer))
+    ) {
+      return out.buffer as ArrayBuffer
+    }
     return out.slice().buffer as ArrayBuffer
   }
 

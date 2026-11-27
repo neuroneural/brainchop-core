@@ -47,36 +47,32 @@ system glibc and zlib. OpenCL loads its driver dynamically when used. Explicit l
 
 ```text
 brainchop-mindgrab       skull stripping in any modality
-brainchop-mindmap-fast    18-class brain segmentation
-brainchop-mindmap        18-class brain segmentation (24-channel, gDice-priority)
-brainchop-mindsnap       104-class Desikan-Killiany parcellation (24-channel, infant refit-synth)
+brainchop-mindmap-fast   18-class brain segmentation (16-channel, MindMap v3.5)
+brainchop-mindmap        18-class brain segmentation (24-channel, MindMap-18 v4.0 Gold)
+brainchop-mindsnap       104-class Desikan-Killiany parcellation (24-channel, MindSnap-104 v4.0 Gold)
 ```
 
-`mindsnap` is mindmap's backbone with a 104-class head and the infant
-refit-synth weights from `brainchop-test`. It reproduces `brainchop-cli`
-(tinygrad) — including its 2/98 quantile normalization, which differs from the
-browser app's — to 0 and 2 voxels on the two test inputs, the two being fp32
-ties. Backends: CPU, CUDA, Metal, and in the browser WebGPU, WebGL2 and wasm CPU; there is
-no OpenCL or HIP module for it. CPU segment time is about 5% above mindmap's.
+`mindsnap` is mindmap's 24-channel backbone with a 104-class head and 5/95
+quantile normalization. Backends: CPU, CUDA, HIP (`gfx1151`), Metal, and in
+the browser WebGPU, WebGL2 and wasm CPU; there is no OpenCL module for it.
+CPU segment time is about 5% above mindmap's.
 
 `mindmap` is `model16chan18cls`'s architecture at 24 channels rather than 16 —
 the same 13 hidden layers, the same dilation ladder, the same 18 classes and the
 same colormap — so it is the wider and slower member of that pair, not a
 different task. On an Apple M4 Pro over `test/t1_crop.nii.gz`, an idle machine:
 3.6 s against 6.5 s on the CPU backend and 1.03 s against 1.69 s on Metal.
-mindmap with `--pve` takes 1.87–1.89 s on Metal against 7.0–7.6 s on CPU
-(three 1 mm scans, alternated), peaking at ≤ 4.0 GB. Metal's default 8-bit
-turbo path (below) runs mindmap in about 0.84 s of GPU time against 1.27 s for fp16,
-peaking near 1 GB rather than 3.2–4.1 GB. In the browser,
-`segmentTissues` on `t1_crop` takes 2.75 s on WebGPU, 5.8 s on WebGL2 and
-12.5 s on wasm CPU (Chrome).
+Metal's default 8-bit turbo path (below) runs mindmap in about 0.84 s of GPU time
+against 1.27 s for fp16, peaking near 1 GB rather than 3.2–4.1 GB, and also
+drives `--pve` directly from Layer 12 (`~1.1 s` / `~1.2 GB` instead of falling
+back to the 4.0 GB fp16 engine). In the browser, `segmentTissues` on `t1_crop`
+takes ~2.75 s on WebGPU, 5.8 s on WebGL2 and 12.5 s on wasm CPU (Chrome).
 
 `--version` (or `-v`) prints just the version, e.g.
-`brainchop-mindgrab 1.0.0`. Any of the four with no arguments, or with
+`brainchop-mindgrab 1.1.1`. Any of the four with no arguments, or with
 `--help`, also prints it on the description line — `BrainChop mindgrab: skull stripping in any modality
-(v1.0.0)`. Every run also prints it beside the backend it selected, which
-is the line to quote in a bug report. `0.1` means the CLI is not yet promised to
-be stable; the rest is the build date.
+(v1.1.1)`. Every run also prints it beside the backend it selected, which
+is the line to quote in a bug report.
 
 Common to all four:
 
@@ -130,14 +126,15 @@ activations, fused moments, fp16 matrix operands with fp32 accumulation on
 Metal, and a background row skip (`src/turbo_cone.h`; `make TURBO_CONE=0`
 computes every row). It agrees with the CPU on 99.2–99.98% of foreground
 voxels on the T1 fixtures, but less on non-T1 scans (CT, 7T, BOLD), where
-fp16 reaches 99.7–99.9%. `--no-turbo` selects the fp16 path; `--pve` always
-uses it. Other GPU backends are unchanged.
+fp16 reaches 99.7–99.9%. `--no-turbo` selects the fp16 path (including `--no-turbo --pve`).
+Other GPU backends are unchanged.
 
 The native arm64/x86 CPU turbo engine uses
 compact hidden convolutions (`src/meshnet_turbo.h`). Supported Apple SME CPUs
 (tested on M4 Pro) use fp16 operands with fp32 accumulation. Other capable
 CPUs use coarse/residual activation bytes and hi/lo s8 weights through Arm
-i8mm or x86 VNNI. CPUs without SME or either integer ISA (e.g. M1) and wasm run exact.
+i8mm, Armv8.2 SDOT (Apple M1 and later), x86 VNNI, or x86 AVX2. CPUs without
+any of those integer ISAs and wasm run exact.
 Both turbo paths agree with exact output on 99.95–100% of foreground voxels
 on the T1 fixtures. `--crop`, `--export-classes` and `--pve` always run
 exact. Full-volume exact inference (`--no-turbo`) also uses SME on supported
@@ -406,8 +403,8 @@ activations. GroupNorm performs its reduction and arithmetic in fp32 to avoid
 fp16 square overflow. MindGrab's reference fused classifier retains its fp32
 weights and trained final bias; the two 18-class models' classifiers are fp16.
 Metal shader fast-math is disabled to match tinygrad's generated program.
-This describes the `--no-turbo` / `--pve` path; the default turbo kernels are
-hand-written (`src/metal_turbo.h`).
+This describes the `--no-turbo` path; the default turbo kernels (including
+turbo `--pve`) are hand-written (`src/metal_turbo.h`).
 
 ## Creating a notarized macOS installer package
 
@@ -556,9 +553,9 @@ the local legacy compiler does not change the shipped module compatibility.
 ### Linux and Windows release archives
 
 ```sh
-make -C src native-package VERSION=1.0.0
+make -C src native-package VERSION=1.1.1
 # Include older x86 CPUs:
-make -C src native-package VERSION=1.0.0 X86_ISA=
+make -C src native-package VERSION=1.1.1 X86_ISA=
 ```
 
 Packaging includes the `CUDA_MODELS` executables — every model with a fatbin,

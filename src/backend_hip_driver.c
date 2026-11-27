@@ -404,6 +404,9 @@ static int hip_segment(const unsigned char *conformed, float *result,
 	const int pve = options && options->tissue_planes;
 	if (options && (options->roi_enabled || options->class_writer)) return 2;
 	if (pve && !profile->supports_pve) return 2;
+#if !defined(BC_HIP_PVE_REVISION) || BC_HIP_PVE_REVISION < BC_PVE_PRIOR_REVISION
+	if (pve) return 2;
+#endif
 	HIPdevice device;
 	bc_hip_device_prop properties;
 	int requested = options ? options->adapter : -1;

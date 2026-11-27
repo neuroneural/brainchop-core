@@ -175,7 +175,7 @@ export interface SegmentResult {
 
 /** Tissue fractions use the same input/output grid and compression options. */
 export type TissueOptions = Omit<SegmentOptions, 'model' | 'mask' | 'borderMm' | 'legacyCleanup'> & {
-  model: 'mindmap' | 'mindmap-fast' | '16chan18cls'
+  model: 'mindmap'
 }
 export interface TissueMaps {
   gm: ArrayBuffer; wm: ArrayBuffer; csf: ArrayBuffer

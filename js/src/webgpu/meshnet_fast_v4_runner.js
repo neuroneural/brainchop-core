@@ -243,6 +243,7 @@ function toF16Array(src) {
 
 const packCache = new Map();
 const MAX_PACK_CACHE = 12;
+const parsedWeightCache = new WeakMap();
 const netPipeCache = new WeakMap();
 const ioPipeCache = new WeakMap();
 
@@ -693,7 +694,7 @@ function prepareHeadMaskFromNativeInput(raw, headRow, yzActive, normOffset, dete
 
 function getProbCacheKey(probCfg) {
   return probCfg
-    ? `${probCfg.grayMask}_${probCfg.whiteMask}_${probCfg.csfMask}_${probCfg.temperature}_${probCfg.supportTemperature}`
+    ? `${probCfg.grayMask}_${probCfg.whiteMask}_${probCfg.mixedGrayWhiteMask ?? 0}_${probCfg.csfMask}_${probCfg.temperature}_${probCfg.supportTemperature}`
     : 'seg';
 }
 
@@ -1621,6 +1622,7 @@ ${rep(4, (j) => `    let k${j} = k_base + ${j}u;
       let bit${j} = 1u << k${j};
       if ((${probCfg.grayMask}u & bit${j}) != 0u) { gm_num = gm_num + v${j}; }
       if ((${probCfg.whiteMask}u & bit${j}) != 0u) { wm_num = wm_num + v${j}; }
+      if ((${probCfg.mixedGrayWhiteMask ?? 0}u & bit${j}) != 0u) { let hv${j} = v${j} * 0.5; gm_num = gm_num + hv${j}; wm_num = wm_num + hv${j}; }
       if ((${probCfg.csfMask}u & bit${j}) != 0u) { csf_num = csf_num + v${j}; }
     }\n`)}  }
 
@@ -5733,25 +5735,37 @@ export async function setupNet(device, safetensorBytes, callbackUI, modelEntry =
 
 async function setupNetInner(device, safetensorBytes, callbackUI, modelEntry = {}) {
   const bytes = safetensorBytes instanceof Uint8Array ? safetensorBytes : new Uint8Array(safetensorBytes);
-  const parsed = modelEntry?.modelBinModel
-    ? parseModelBin(bytes, modelEntry.modelBinModel)
-    : parseSafetensors(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  const desc = describeSafetensors(parsed);
-  if (modelEntry?.classifierBias && desc.classifier) {
-    desc.classifier.bias = Float32Array.from(modelEntry.classifierBias);
-  }
-  const modelDesc = descriptorFor(modelEntry);
-  const dilations = modelEntry?.dilations || modelDesc?.dilations || (desc.convs.length === 25
-    ? [16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1]
-    : desc.convs.length === 9
-      ? [1, 2, 4, 8, 16, 8, 4, 2, 1]
-      : DEEP13);
-  const activation = modelEntry?.activation || modelDesc?.activation || (desc.affines.length || desc.convs.length >= 13 ? 'gelu_tanh' : 'relu');
+  const weightMemoKey = `${modelEntry?.modelBinModel ?? ''}|${modelEntry?.activation ?? ''}|${modelEntry?.dilations ? modelEntry.dilations.join(',') : ''}|${modelEntry?.classifierBias ? JSON.stringify(modelEntry.classifierBias) : ''}`;
+  let byKey = parsedWeightCache.get(bytes);
+  let memo = byKey?.get(weightMemoKey);
+  if (!memo) {
+    const parsed = modelEntry?.modelBinModel
+      ? parseModelBin(bytes, modelEntry.modelBinModel)
+      : parseSafetensors(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const desc = describeSafetensors(parsed);
+    if (modelEntry?.classifierBias && desc.classifier) {
+      desc.classifier.bias = Float32Array.from(modelEntry.classifierBias);
+    }
+    const modelDesc = descriptorFor(modelEntry);
+    const dilations = modelEntry?.dilations || modelDesc?.dilations || (desc.convs.length === 25
+      ? [16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1, 16, 8, 4, 2, 1]
+      : desc.convs.length === 9
+        ? [1, 2, 4, 8, 16, 8, 4, 2, 1]
+        : DEEP13);
+    const activation = modelEntry?.activation || modelDesc?.activation || (desc.affines.length || desc.convs.length >= 13 ? 'gelu_tanh' : 'relu');
 
-  const rawChan = desc.convs[0].outC;
-  const cs = rawChan > 8 ? Math.ceil(rawChan / 8) * 8 : Math.ceil(rawChan / 4) * 4;
-  const d = deriveDescriptor(desc, { nx: DIM, ny: DIM, nz: DIM, cs, activation, dilations });
-  const packed = getPackedWeightsCached(bytes, desc, d, modelEntry);
+    const rawChan = desc.convs[0].outC;
+    const cs = rawChan > 8 ? Math.ceil(rawChan / 8) * 8 : Math.ceil(rawChan / 4) * 4;
+    const d = deriveDescriptor(desc, { nx: DIM, ny: DIM, nz: DIM, cs, activation, dilations });
+    const packed = getPackedWeightsCached(bytes, desc, d, modelEntry);
+    memo = { desc, d, packed };
+    if (!byKey) {
+      byKey = new Map();
+      parsedWeightCache.set(bytes, byKey);
+    }
+    byKey.set(weightMemoKey, memo);
+  }
+  const { d, packed } = memo;
   const probCfg = modelEntry?.outputType === 'probability' ? tissueProbabilityConfig(modelEntry, d.nclass) : null;
 
   const hasF16 = !!device.features?.has?.('shader-f16') && !modelEntry?.disableF16;

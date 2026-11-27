@@ -75,12 +75,12 @@ try {
   }
   const refusals=await page.evaluate(async()=>{
     const {segmentTissues}=await import('/index.js'),results=[]
-    for(const opts of [{model:'mindgrab'},{model:'mindmap',legacyCleanup:true}]) {
+    for(const opts of [{model:'mindgrab'},{model:'mindmap-fast'},{model:'16chan18cls'},{model:'mindmap',legacyCleanup:true}]) {
       try{await segmentTissues(new Uint8Array([1,2,3,4]),opts);results.push('unexpected success')}
       catch(e){results.push(e.code)}
     }
     return results
   })
-  assert.deepEqual(refusals,['unsupported-option','unsupported-option'])
+  assert.deepEqual(refusals,['unsupported-option','unsupported-option','unsupported-option','unsupported-option'])
   console.log(`Tissue API: ${report.length} selected cases, encoding/worker/geometry checks and option refusals PASS`)
 }finally{await browser.close();server.close()}

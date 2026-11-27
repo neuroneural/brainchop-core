@@ -37,9 +37,22 @@ function check(name,edit) {
   }
   assert(worst<=2**-24,`${name}: max ${worst} exceeds unchanged gate ${2**-24}`)
   console.log(`${name}: applied=${reference.stats.applied}, max=${worst}`);count++
+  return { reference, actual }
 }
 try {
-  check('three tissues')
+  const base = check('three tissues')
+  const mixed = check('myelinated 50/50 subcortical does not skew cortical mu_gm', (p, i, x, y, z) => {
+    if (x >= 13 && x <= 18 && y >= 10 && y <= 21 && z >= 10 && z <= 21) {
+      /* 50/50 GM/WM prior (like Thalamus/Pallidum/VDC) with bright WM-like T1 intensity */
+      p[0][i] = 0.48; p[1][i] = 0.48; p[2][i] = 0.0; p[3][i] = 0.96; p[4][i] = 0.78
+    }
+  })
+  assert(mixed.reference.stats.applied, 'mixed subcortical case must apply')
+  assert(Math.abs(mixed.reference.stats.tissueMeans.gray - base.reference.stats.tissueMeans.gray) < 0.01,
+    `myelinated 50/50 skewed cortical mu_gm: ${mixed.reference.stats.tissueMeans.gray} vs ${base.reference.stats.tissueMeans.gray}`)
+  const probe = 15 + 15 * 32 + 15 * 1024
+  assert(mixed.actual[probe] + mixed.actual[n + probe] > 0.90,
+    'mixed subcortical voxel must retain full GM+WM brain support (no hole)')
   check('contrast scaled',(p,i)=>{p[4][i]=p[4][i]*.7+.1})
   check('inverted contrast refuses fit',(p,i)=>{p[4][i]=1-p[4][i]})
   check('flat intensity refuses fit',(p,i)=>{p[4][i]=.5})

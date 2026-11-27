@@ -44,6 +44,9 @@ import {
   growMaskBorderMm,
 } from '../src/webgpu/bwlabels.js'
 import { resliceVolumeData, invertAffine4x4, mulAffine4x4 } from '../src/webgpu/reslice-volume.js'
+import { computeQuantiles, computeLinearQuantiles } from '../src/webgpu/tensor-utils.js'
+import { tissueProbabilityConfig } from '../src/webgpu/probability.js'
+import { applyCatLitePartialVolume } from '../src/webgpu/cat-lite.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
@@ -674,5 +677,211 @@ test('MindGrab masking preserves integer encoding, scaling (incl. negative/fract
     assert.equal(res.sclInter, 0)
     assert.ok(res.data instanceof Float32Array)
     assert.deepEqual(Array.from(res.data), [0, 0, 30, 50])
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 6. Stage 1 guards: <838.9 mL small-brain normalization & PVE mask/purity fixes
+// ---------------------------------------------------------------------------
+test('Small (<838.9 mL) skull-stripped normalization falls back to non-zero foreground quantiles', () => {
+  const nvox = 256 * 256 * 256
+  const vol = new Uint8Array(nvox)
+
+  // ~500 mL skull-stripped brain (500,000 nonzero voxels = 2.98% < 5% -> whole-vol q95 == 0)
+  const smallCount = 500_000
+  for (let i = 0; i < smallCount; i++) vol[i] = 40 + (i % 181)
+  const q500 = computeQuantiles(vol, 0.05, 0.95)
+  assert.ok(q500.qmax > q500.qmin, `expected non-zero fg range, got ${JSON.stringify(q500)}`)
+  assert.ok(q500.qmin >= 45 && q500.qmin <= 55, `unexpected fg q05: ${q500.qmin}`)
+  assert.ok(q500.qmax >= 205 && q500.qmax <= 215, `unexpected fg q95: ${q500.qmax}`)
+
+  // ~300 mL infant skull-stripped brain (300,000 nonzero voxels = 1.79% < 2% -> q98 == 0 too)
+  vol.fill(0)
+  const infantCount = 300_000
+  for (let i = 0; i < infantCount; i++) vol[i] = 40 + (i % 181)
+  const qLin = computeLinearQuantiles(vol, 0.02, 0.98)
+  assert.ok(qLin.qmax > qLin.qmin, `expected non-zero linear fg range, got ${JSON.stringify(qLin)}`)
+  assert.ok(qLin.qmin >= 40 && qLin.qmin <= 48, `unexpected linear fg q02: ${qLin.qmin}`)
+  assert.ok(qLin.qmax >= 212 && qLin.qmax <= 220, `unexpected linear fg q98: ${qLin.qmax}`)
+
+  // Constant nonzero foreground in sparse mask (all fg == 180)
+  vol.fill(0)
+  vol.fill(180, 0, infantCount)
+  const qConst = computeQuantiles(vol, 0.05, 0.95)
+  assert.deepEqual(qConst, { qmin: 0, qmax: 180 })
+  const qLinConst = computeLinearQuantiles(vol, 0.02, 0.98)
+  assert.deepEqual(qLinConst, { qmin: 0, qmax: 180 })
+
+  // Normal >= 839 mL brain (1,200,000 nonzero voxels = 7.15% > 5%): unchanged whole-volume q05=0, q95>0
+  vol.fill(0)
+  const normalCount = 1_200_000
+  for (let i = 0; i < normalCount; i++) vol[i] = 40 + (i % 181)
+  const qNormal = computeQuantiles(vol, 0.05, 0.95)
+  assert.equal(qNormal.qmin, 0)
+  assert.ok(qNormal.qmax > 40)
+})
+
+test('PVE prior masks cover Brain-Stem (13) in WM and isolate myelinated {7,10,17} from cortical mu_gm', () => {
+  const cfg = tissueProbabilityConfig({}, 18)
+  // Brain-Stem (13) in WM mask
+  assert.notEqual(cfg.whiteMask & (1 << 13), 0, 'Brain-Stem (13) must be in whiteMask')
+  // Myelinated deep GM {7, 10, 17} in mixedGrayWhiteMask, not pure grayMask
+  for (const cls of [7, 10, 17]) {
+    assert.notEqual(cfg.mixedGrayWhiteMask & (1 << cls), 0, `class ${cls} must be in mixedGrayWhiteMask`)
+    assert.equal(cfg.grayMask & (1 << cls), 0, `class ${cls} must not be in pure grayMask`)
+  }
+  // Every non-background label 1..17 covered without overlap
+  const all = (cfg.grayMask | cfg.whiteMask | cfg.mixedGrayWhiteMask | cfg.csfMask) >>> 0
+  assert.equal(all, ((1 << 18) - 2) >>> 0)
+  assert.equal(cfg.grayMask & cfg.whiteMask, 0)
+  assert.equal(cfg.grayMask & cfg.mixedGrayWhiteMask, 0)
+  assert.equal(cfg.whiteMask & cfg.mixedGrayWhiteMask, 0)
+  assert.equal(cfg.csfMask & (cfg.grayMask | cfg.whiteMask | cfg.mixedGrayWhiteMask), 0)
+
+  // Verify CAT-lite purity gate prevents 50/50 mixed voxels from skewing cortical mu_gm
+  const dim = [24, 24, 24]
+  const n = 24 * 24 * 24
+  const makeCase = (withMixed) => {
+    const gm = new Float32Array(n), wm = new Float32Array(n), csf = new Float32Array(n), img = new Float32Array(n)
+    for (let z = 0; z < 24; z++) {
+      for (let y = 0; y < 24; y++) {
+        for (let x = 0; x < 24; x++) {
+          const i = x + y * 24 + z * 576
+          const t = x < 8 ? 2 : x < 16 ? 0 : 1
+          gm[i] = t === 0 ? 0.85 : 0.05
+          wm[i] = t === 1 ? 0.85 : 0.05
+          csf[i] = t === 2 ? 0.85 : 0.05
+          img[i] = [0.5, 0.8, 0.2][t]
+          if (withMixed && x >= 10 && x <= 14 && y >= 6 && y <= 18 && z >= 6 && z <= 18) {
+            gm[i] = 0.48; wm[i] = 0.48; csf[i] = 0.0; img[i] = 0.78
+          }
+        }
+      }
+    }
+    return applyCatLitePartialVolume([gm, wm, csf], img, dim, {})
+  }
+  const clean = makeCase(false)
+  const mixed = makeCase(true)
+  assert.equal(clean.stats.applied, true)
+  assert.equal(mixed.stats.applied, true)
+  assert.ok(
+    Math.abs(mixed.stats.tissueMeans.gray - clean.stats.tissueMeans.gray) < 0.01,
+    `50/50 mixed myelinated voxels skewed mu_gm: ${mixed.stats.tissueMeans.gray} vs ${clean.stats.tissueMeans.gray}`,
+  )
+  const probe = 12 + 12 * 24 + 12 * 576
+  assert.ok(mixed.tissues[0][probe] + mixed.tissues[1][probe] > 0.9, 'no hole in mixed region')
+})
+
+// ---------------------------------------------------------------------------
+// 7. Stage 2 upgrades: persistent singleton worker, fused constant guard,
+//    reusable bwlabels scratch, and mindmap-fast PVE contract refusal
+// ---------------------------------------------------------------------------
+test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persistent worker & PVE contract', async () => {
+  // 1. Fused constant & all-NaN input guard inside conformVolumeData
+  const dims = [3, 4, 4, 4, 1, 1, 1, 1]
+  const affine = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1]
+  assert.throws(
+    () => conformVolumeData({
+      img: new Float32Array(64).fill(7),
+      datatypeCode: NIFTI_DT.FLOAT32,
+      dims, affine, rejectConstant: true,
+    }),
+    /input image is constant.*all 64 finite voxels equal 7/,
+  )
+  assert.throws(
+    () => conformVolumeData({
+      img: new Float32Array(64).fill(Number.NaN),
+      datatypeCode: NIFTI_DT.FLOAT32,
+      dims, affine, rejectConstant: true,
+    }),
+    /input has no finite voxels/,
+  )
+
+  // 2. Reusable largestBinaryComponent26 scratch leaves zero stale state across repeated calls
+  const shape = [8, 8, 8]
+  const v1 = new Uint8Array(512)
+  // Two components: small (size 2) at x=0..1, large (size 4) at x=4..7
+  v1[0] = 3; v1[1] = 3
+  v1[4] = 5; v1[5] = 5; v1[6] = 5; v1[7] = 5
+  largestBinaryComponent26(v1, shape, false)
+  assert.equal(v1[0], 0); assert.equal(v1[1], 0)
+  assert.equal(v1[4], 5); assert.equal(v1[7], 5)
+
+  const v2 = new Uint8Array(512)
+  // Now largest is at x=0..2 (previously cleared positions!), small at x=6
+  v2[0] = 9; v2[1] = 9; v2[2] = 9
+  v2[6] = 4
+  largestBinaryComponent26(v2, shape, true)
+  assert.equal(v2[0], 1); assert.equal(v2[1], 1); assert.equal(v2[2], 1)
+  assert.equal(v2[6], 0)
+
+  // 3. Persistent singleton worker reuse, timeout reset, disposeWorker(), and mindmap-fast PVE refusal
+  const distIndex = join(repoRoot, 'js', 'dist', 'index.js')
+  if (existsSync(distIndex)) {
+    const mod = await import(`file://${distIndex}?v=${Date.now()}`)
+    // mindmap-fast & 16chan18cls must be refused for segmentTissues (matching model_capabilities.json)
+    for (const m of ['mindmap-fast', '16chan18cls', 'mindgrab', 'mindsnap']) {
+      await assert.rejects(
+        () => mod.segmentTissues(new Uint8Array([1, 2, 3, 4]), { model: m }),
+        (err) => err && err.code === 'unsupported-option',
+        `segmentTissues(${m}) must reject with unsupported-option`,
+      )
+    }
+
+    // Mock global Worker to verify singleton reuse across calls + reset on timeout + disposeWorker()
+    const origWorker = globalThis.Worker
+    let created = 0
+    let terminated = 0
+    let hangNext = false
+    class MockWorker {
+      constructor() {
+        created++
+        this.onmessage = null
+        this.onerror = null
+        this.onmessageerror = null
+      }
+      postMessage() {
+        if (hangNext) return
+        queueMicrotask(() => {
+          this.onmessage?.({
+            data: {
+              type: 'done',
+              image: new Uint8Array(8).buffer,
+              elapsedMs: 1,
+              backend: 'webgpu',
+            },
+          })
+        })
+      }
+      terminate() { terminated++ }
+    }
+    globalThis.Worker = MockWorker
+    try {
+      mod.disposeWorker()
+      const dummy = new Uint8Array([1, 2, 3, 4])
+      const r1 = await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      const r2 = await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      assert.equal(r1.ranInWorker, true)
+      assert.equal(r2.ranInWorker, true)
+      assert.equal(created, 1, 'persistent worker must be reused across warm calls')
+      assert.equal(terminated, 0, 'persistent worker must not terminate after normal completion')
+
+      // Timeout must hard-terminate the wedged worker so next call spawns a fresh one
+      hangNext = true
+      await assert.rejects(
+        () => mod.segment(dummy, { model: 'mindgrab', worker: true, timeoutMs: 20 }),
+        (err) => err && err.code === 'inference-failed',
+      )
+      assert.equal(terminated, 1, 'timeout must terminate stuck worker')
+
+      hangNext = false
+      await mod.segment(dummy, { model: 'mindgrab', worker: true })
+      assert.equal(created, 2, 'fresh worker must be spawned after timeout termination')
+      mod.disposeWorker()
+      assert.equal(terminated, 2, 'disposeWorker() must terminate singleton worker')
+    } finally {
+      mod.disposeWorker()
+      globalThis.Worker = origWorker
+    }
   }
 })

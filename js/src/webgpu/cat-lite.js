@@ -8,6 +8,10 @@
 // not CAT12 and does not use a hard segmentation boundary.
 
 const EPSILON = 1e-8;
+// Exclude 50/50 mixed priors (myelinated subcorticals {7,10,17} and PVE
+// borders) from global tissue mean/sigma estimation so they cannot skew
+// cortical GM / WM statistics.
+const STAT_PURITY = 0.55;
 // main.js conforms every input to 256^3 before dispatching to a backend.
 const CONFORMED_SHAPE = [256, 256, 256];
 
@@ -102,9 +106,10 @@ function makeFitData([gm, wm, csf], intensity, { minSupport, priorPower }, suppo
     indices[k] = i;
     values[k] = intensity[i] - 0;
     if (cachedCount) {
-      weightCsf[k] = support * Math.pow(c / raw, priorPower);
-      weightGm[k] = support * Math.pow(g / raw, priorPower);
-      weightWm[k] = support * Math.pow(w / raw, priorPower);
+      const pc = c / raw, pg = g / raw, pw = w / raw;
+      weightCsf[k] = pc > STAT_PURITY ? support * Math.pow(pc, priorPower) : 0;
+      weightGm[k] = pg > STAT_PURITY ? support * Math.pow(pg, priorPower) : 0;
+      weightWm[k] = pw > STAT_PURITY ? support * Math.pow(pw, priorPower) : 0;
     }
     k++;
   }
@@ -115,9 +120,10 @@ function loadFitWeights([gm, wm, csf], i, priorPower, weights) {
   const g = Math.max(0, gm[i]), w = Math.max(0, wm[i]), c = Math.max(0, csf[i]);
   const raw = g + w + c;
   const support = Math.min(raw, 1);
-  weights[0] = support * Math.pow(c / raw, priorPower);
-  weights[1] = support * Math.pow(g / raw, priorPower);
-  weights[2] = support * Math.pow(w / raw, priorPower);
+  const pc = c / raw, pg = g / raw, pw = w / raw;
+  weights[0] = pc > STAT_PURITY ? support * Math.pow(pc, priorPower) : 0;
+  weights[1] = pg > STAT_PURITY ? support * Math.pow(pg, priorPower) : 0;
+  weights[2] = pw > STAT_PURITY ? support * Math.pow(pw, priorPower) : 0;
 }
 
 function estimateStats({ indices, values, weightCsf, weightGm, weightWm, volumes }, { minSeparation, sigmaFloor, priorPower }, meansOnly = false) {

@@ -58,39 +58,44 @@ static int metal_available(void) {
 	}
 }
 
-static double quantile_u8(const int64_t *cum, size_t n, double q) {
+#if BC_MODEL_QUANTILE_MODE == 0
+static double quantile_u8(const int64_t *cum, size_t n, double q, int upper) {
+	(void)upper;
 	double rank=q*(double)(n-1), base=floor(rank), t=rank-base;
 	size_t i=(size_t)base;
 	int a=0,b=0;
 	while(a<255&&cum[a]<=(int64_t)i)a++;
 	b=a;
 	while(b<255&&cum[b]<=(int64_t)(i+1))b++;
-	return (double)a+(b-a)*t;
+	if(t<0.5) return (double)a+(double)(b-a)*t;
+	return (double)b-(double)(b-a)*(1.0-t);
 }
+#else
+static double quantile_u8(const int64_t *cum, size_t n, double q, int upper) {
+	double raw=upper?ceil((double)n*q):(double)n*q;
+	size_t rank=upper?(raw>0.0?(size_t)raw-1:0):(size_t)raw;
+	if(rank>=n)rank=n-1;
+	int bin=0;
+	while(bin<255&&cum[bin]<=(int64_t)rank)bin++;
+	return (double)bin;
+}
+#endif
 
-/*
- * The quantile POSITIONS, the denominator guard and the clamp come from the
- * generated descriptor, as they do in the CPU engine and in
- * bc_accel_normalize_input.
- *
- * The quantile FORM does not. quantile_u8 above is always the interpolated
- * form, so a model declaring quantile_mode "rank" -- model16 does -- gets
- * interpolated quantiles here and plain rank selection on the CPU. Metal's
- * linear form also lacks the CPU's `t < 0.5` stable-lerp branch, so even a
- * "linear" model differs slightly. Both predate the per-model split (see
- * `git show origin/main:src/backend_metal.mm`) and are absorbed by the fp16
- * tolerance, which is why they have never shown up as a failure.
- *
- * Do not "fix" this in isolation: it changes Metal output, and the CUDA and
- * OpenCL paths need checking for the same divergence at the same time. See the
- * known-gaps entry in the build notes.
- */
 static __fp16 *normalize_input(const unsigned char *src) {
 	int64_t hist[256]={0},cum[256],run=0;
 	for(size_t i=0;i<BC_NVOX;i++)hist[src[i]]++;
 	for(int i=0;i<256;i++){run+=hist[i];cum[i]=run;}
-	float lo=(float)quantile_u8(cum,BC_NVOX,BC_MODEL_NORM_Q_LOW);
-	float hi=(float)quantile_u8(cum,BC_NVOX,BC_MODEL_NORM_Q_HIGH);
+	float lo=(float)quantile_u8(cum,BC_NVOX,BC_MODEL_NORM_Q_LOW,0);
+	float hi=(float)quantile_u8(cum,BC_NVOX,BC_MODEL_NORM_Q_HIGH,1);
+	if(hi<=lo&&hist[0]<(int64_t)BC_NVOX) {
+		int64_t fg_cum[256];
+		fg_cum[0]=0;
+		for(int i=1;i<256;i++)fg_cum[i]=cum[i]-hist[0];
+		size_t fg_n=BC_NVOX-(size_t)hist[0];
+		lo=(float)quantile_u8(fg_cum,fg_n,BC_MODEL_NORM_Q_LOW,0);
+		hi=(float)quantile_u8(fg_cum,fg_n,BC_MODEL_NORM_Q_HIGH,1);
+		if(hi<=lo&&hi>0.0f)lo=0.0f;
+	}
 	float den=hi-lo+BC_MODEL_NORM_DENOM_EPS;
 	if(!(den>0))den=1;
 	__fp16 *out=(__fp16 *)malloc(BC_NVOX*sizeof(*out));
@@ -273,6 +278,7 @@ static const char bc_metal_pve_source[] =
 "constant int RADIUS=int(3.0f*SIGMA+0.5f);\n"
 "constant uint MASK[3]={" BC_MSL_STR(BC_PRIOR_GM_MASK) "," BC_MSL_STR(BC_PRIOR_WM_MASK) ","
 	BC_MSL_STR(BC_PRIOR_CSF_MASK) "};\n"
+"constant uint MIXED_GWM_MASK=" BC_MSL_STR(BC_PRIOR_MIXED_GWM_MASK) ";\n"
 /* Classifier as packed for the generated kernels: [class][channel]. Summation
    order matches mn_pve_rows: bias, then channels ascending. */
 "kernel void bc_pve_priors(device const half *act [[buffer(0)]],\n"
@@ -291,6 +297,7 @@ static const char bc_metal_pve_source[] =
 "  float v=exp(centered/TEMPERATURE), s=exp(centered/SUPPORT_TEMPERATURE);\n"
 "  total+=v; support_total+=s; if(k==0)background=s;\n"
 "  for(uint t=0;t<3;t++)if(MASK[t]&(1u<<k))tissue[t]+=v;\n"
+"  if(MIXED_GWM_MASK&(1u<<k)){float hv=0.5f*v;tissue[0]+=hv;tissue[1]+=hv;}\n"
 " }\n"
 " for(uint t=0;t<3;t++)out[t*NV+i]=tissue[t]/total;\n"
 " out[3*NV+i]=clamp(1.0f-background/support_total,0.0f,1.0f);\n"
@@ -499,10 +506,11 @@ static int metal_segment(const unsigned char *conformed, float *result,
 	if(!conformed||!result||!weights)return 1;
 	if(options&&(options->roi_enabled||options->class_writer))return 2;
 	float *planes=options?options->tissue_planes:NULL;
+	int no_turbo=options&&options->no_turbo;
 	size_t dispatch_count=sizeof(BC_M(_dispatches))/sizeof(BC_M(_dispatches)[0]);
 #if BC_HAS_PVE
 	if(planes) {
-		if(pve_layout_invalid())return 1;
+		if(no_turbo&&pve_layout_invalid())return 1;
 		dispatch_count=BC_M_UC(_CLASSIFIER_DISPATCH);
 	}
 #else
@@ -512,9 +520,9 @@ static int metal_segment(const unsigned char *conformed, float *result,
 		@try {
 			id<MTLDevice> metal=MTLCreateSystemDefaultDevice();
 			if(!metal)return 1;
-			/* The 8-bit path has no tissue-prior head: --pve stays fp16. */
-			if(!planes&&!(options&&options->no_turbo))
-				return run_turbo(metal,conformed,result,weights);
+			if(!no_turbo)
+				return run_turbo(metal,conformed,result,weights,planes,
+					planes?options->tissue_priors_prepared:NULL);
 			return run_generated(metal,conformed,result,weights,
 				BC_M(_source),BC_M(_kernel_names),
 				sizeof(BC_M(_kernel_names))/sizeof(BC_M(_kernel_names)[0]),

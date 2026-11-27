@@ -2,10 +2,21 @@
 #define BRAINCHOP_CUDA_KERNELS_CUH
 
 /*
- * Device code shared by the CUDA runtime backend and future offline module
- * generation. Keep host allocation, launchers, profiling and tuning policy in
- * backend_cuda.cu. The scalar and WMMA template variants are instantiated by
- * the launchers expanding cuda_variants.h.
+ * Device code shared by the CUDA runtime backend and offline module generation.
+ * Keep host allocation, launchers, profiling and tuning policy in
+ * backend_cuda_host.h.
+ *
+ * Key performance properties (ABI 3):
+ *  - Pre-padded 24-ch WMMA weights ([27][2][2][16][16], ldm=16, 54 KiB in L1/L2)
+ *    eliminate per-warp shared-memory tile_b re-copies and direct-load k=0 from
+ *    16-byte-aligned global rows while vectorizing k=1 via uint4.
+ *  - GroupNorm moments are fused into the conv epilogue (FP32 warp sum -> FP64
+ *    block sum -> 256-stripe FP64 atomicAdd), eliminating reduce_channels_kernel's
+ *    full-volume HBM re-read while keeping 53-bit FP64 invariance across WARPS.
+ *  - turbo_cone.h row lists and pure-background fills skip empty background rows.
+ *  - norm_gelu_kernel walks coalesced half2 pairs using pre-fused (mul, add).
+ *  - Last layer fuses norm+gelu directly into classify_u8_kernel (16.8 MB DtoH)
+ *    or tissue_priors_kernel + GPU pve_blur_kernel / pve_support_kernel.
  */
 #include "model_specs.h"
 #include "cuda_geometry.h"
@@ -16,9 +27,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Only the offline module exports kernels; the runtime backend retains its
- * original internal linkage. Templates keep their nvcc ABI names, recorded
- * and checked in the module catalog; the seven ordinary entries use C names. */
 #ifdef BC_CUDA_MODULE_EXPORT
 #define BC_CUDA_GLOBAL extern "C"
 #define BC_CUDA_TEMPLATE
@@ -29,8 +37,8 @@
 
 #define CUDA_DIM BRAINCHOP_MODEL_DIM
 #define CUDA_NVOX ((size_t)CUDA_DIM * CUDA_DIM * CUDA_DIM)
-/* Block size for the elementwise kernels (norm+gelu, classify). Unrelated to
-   the convolution's block size, which the tuner owns. */
+#define CUDA_ROWS ((int)(CUDA_DIM * CUDA_DIM))
+#define CUDA_MOMENT_STRIPES 256
 #ifndef CUDA_THREADS
 #define CUDA_THREADS BC_CUDA_GEOMETRY_THREADS
 #endif
@@ -42,103 +50,43 @@
 #endif
 #define CUDA_MAX_CHANNELS BC_CUDA_GEOMETRY_MAX_CHANNELS
 
-/*
- * Activation storage is fp16 on a 16-wide channel stride, which is two changes
- * with one motivation.
- *
- * These models are DESIGNED for fp16 -- it is what upstream brainchop ships and
- * what Metal and WebGPU already do -- so fp32 activations were paying bandwidth
- * for precision the models do not use. Accumulation stays fp32, and the
- * GroupNorm moments fp64, exactly as Metal keeps its reduction wider: the
- * squares in the variance overflow fp16 long before the activations do.
- *
- * The stride is padded to 16 rather than following the logical channel count,
- * for the same reason MESHNET_CPU_CHANNEL_STRIDE and BC_WG_CS are 16: MindGrab
- * is a 15-channel network and 15 tiles into nothing. The pad lane is inert
- * because GroupNorm here is one group per channel, so a zeroed channel has mean
- * 0 and variance 0, normalises to (0-0)/sqrt(0+eps) = 0, and gelu(0) = 0 -- it
- * stays identically zero for every layer. CLAUDE.md records this being verified
- * bit-identical in tinygrad when MindGrab was re-exported padded for Metal.
- *
- * CUDA_CS is the STRIDE; spec->channels remains the logical COUNT. Those were
- * the same number before this change and are not any more, so read every index
- * carefully: activations stride by CUDA_CS, weights and the classifier index by
- * the logical count.
- */
 typedef __half bc_act;
-/*
- * bc_accel_narrow_input allocates ACCEL_NVOX * sizeof(uint16_t) and
- * backend_cuda.cu copies CUDA_NVOX * sizeof(bc_act) out of it. The counts agree
- * (both are BRAINCHOP_MODEL_DIM cubed); the SIZES agree only because bc_act is
- * 16 bits, which nothing else here asserts. Before the narrowing moved to
- * backend_accel.c the malloc and the memcpy shared one expression and could not
- * disagree.
- */
 static_assert(sizeof(bc_act) == sizeof(uint16_t),
 	"bc_accel_narrow_input returns uint16_t; a wider bc_act would read past it");
 #define CUDA_CS CUDA_MAX_CHANNELS
+static_assert((CUDA_CS & 1) == 0, "CUDA_CS must be even for coalesced half2 norm");
+static_assert(!BC_MODEL_HAS_AFFINE || BC_MODEL_CHAN == CUDA_MAX_CHANNELS,
+	"an affine model must fill the activation stride");
+static_assert(BC_MODEL_CHAN <= CUDA_MAX_CHANNELS,
+	"model channels exceed CUDA_MAX_CHANNELS");
 
-/*
- * NDHWC convolution using [dz][dy][dx][in][out] weights.
- *
- * A thread-per-voxel version of this loop is load/store bound rather than FMA
- * bound: it re-reads all 27*Cin*Cout weights from memory for every voxel, which
- * is roughly one load per FMA, and an SM has far fewer load/store units than
- * FMA units. Two changes remove that bottleneck:
- *
- *   1. The layer's weights are staged once per block into shared memory.
- *   2. Each thread owns VPT voxels, and one tap's output-channel weights
- *      are hoisted into registers so they amortise across all of them.
- *
- * The voxels a thread owns are strided by the block size so global loads stay
- * coalesced. Accumulation order over (tap, input channel, output channel) is
- * unchanged, so results are bit-identical to the simple version -- and, more
- * usefully, bit-identical across every (VPT, THREADS) pair, since changing them
- * only changes WHICH thread owns a voxel, never the order in which that voxel's
- * own products are summed. cuda_tune() leans on that: it can demand an exact
- * checksum match from a candidate rather than a tolerance.
- *
- * VPT and THREADS are template parameters so the tuner can pick them per
- * device. __launch_bounds__ is what makes the wide blocks usable at all: it
- * tells ptxas the occupancy it must hit, so it caps registers (spilling if it
- * must) instead of emitting a kernel that cannot launch. Without it,
- * VPT=8/THREADS=512 failed with cudaErrorLaunchOutOfResources.
- *
- * Measured on an RTX 4070 Ti SUPER, alternating A/B: the shipped 8/128 pair ran
- * the MindGrab convolutions in 1531 ms and the tuner's 3/512 in 650 ms (2.36x);
- * model16 is 786 -> 377 ms (2.08x). Both models want the same pair, but they do
- * not gain equally.
- */
-/*
- * The convolution shape used until the tuner has an answer -- and the one
- * BRAINCHOPC_TUNE=0 pins, so it should be the best portable guess rather than a
- * conservative one. 3/512 is the measured optimum on an RTX 4070 Ti SUPER for
- * both models; __launch_bounds__ makes it launchable regardless of register
- * file size, so a device that dislikes it pays in spills, not in failure.
- */
 #ifndef CUDA_CONV_VPT
 #define CUDA_CONV_VPT BC_CUDA_GEOMETRY_CONV_VPT
 #endif
 #ifndef CUDA_CONV_THREADS
 #define CUDA_CONV_THREADS BC_CUDA_GEOMETRY_CONV_THREADS
 #endif
+
+/*
+ * Scalar NDHWC 3x3x3 convolution (Layer 0 on all cards, hidden fallback on sm_60).
+ * Supports optional turbo_cone row lists and fused block-reduced FP64 moments.
+ */
 template <int VPT, int THREADS>
 __global__ __launch_bounds__(THREADS) BC_CUDA_TEMPLATE void conv3d_kernel(
 		const bc_act *__restrict__ source,
 		bc_act *__restrict__ destination, const bc_act *__restrict__ weights,
+		double *__restrict__ sums, const unsigned int *__restrict__ row_list,
+		const float *__restrict__ row_weights, int row_count,
 		int input_channels, int output_channels, int input_stride, int dilation) {
 	(void)output_channels;
-	/* Staged in fp16, which also halves the shared-memory footprint from 27 KB
-	   to 13.5 KB. That is the resource the launch shape was competing for --
-	   the tuner picked wide blocks precisely to amortise it -- so the occupancy
-	   ceiling moves as a side effect of the precision change, and the tuned
-	   shape has to be re-measured rather than carried over. */
-	extern __shared__ bc_act shared_weights[];
+	extern __shared__ __align__(16) char conv_shared[];
+	bc_act *shared_weights = (bc_act *)conv_shared;
 	int weight_count = 27 * input_channels * CUDA_CS;
 	for (int i = (int)threadIdx.x; i < weight_count; i += THREADS)
 		shared_weights[i] = weights[i];
 	__syncthreads();
 
+	size_t total_vox = row_list ? (size_t)row_count * CUDA_DIM : CUDA_NVOX;
 	size_t base = (size_t)blockIdx.x * ((size_t)THREADS * VPT) + threadIdx.x;
 	float accumulator[VPT][CUDA_MAX_CHANNELS];
 #pragma unroll
@@ -147,14 +95,34 @@ __global__ __launch_bounds__(THREADS) BC_CUDA_TEMPLATE void conv3d_kernel(
 		for (int channel = 0; channel < CUDA_MAX_CHANNELS; channel++)
 			accumulator[v][channel] = 0.0f;
 
-	size_t voxel[VPT];
-	int x[VPT], y[VPT], z[VPT];
+	size_t out_voxel[VPT];
+	int x[VPT], y[VPT], z[VPT], valid[VPT];
+	float rw[VPT];
 #pragma unroll
 	for (int v = 0; v < VPT; v++) {
-		voxel[v] = base + (size_t)v * THREADS;
-		x[v] = (int)(voxel[v] & 255);
-		y[v] = (int)((voxel[v] >> 8) & 255);
-		z[v] = (int)(voxel[v] >> 16);
+		size_t idx = base + (size_t)v * THREADS;
+		valid[v] = idx < total_vox;
+		if (valid[v]) {
+			if (row_list) {
+				size_t ridx = idx >> 8;
+				unsigned int row = row_list[ridx];
+				x[v] = (int)(idx & 255);
+				y[v] = (int)(row & 255);
+				z[v] = (int)(row >> 8);
+				out_voxel[v] = (size_t)row * CUDA_DIM + (size_t)x[v];
+				rw[v] = row_weights ? row_weights[ridx] : 1.0f;
+			} else {
+				x[v] = (int)(idx & 255);
+				y[v] = (int)((idx >> 8) & 255);
+				z[v] = (int)(idx >> 16);
+				out_voxel[v] = idx;
+				rw[v] = 1.0f;
+			}
+		} else {
+			x[v] = y[v] = z[v] = 0;
+			out_voxel[v] = 0;
+			rw[v] = 0.0f;
+		}
 	}
 
 	for (int tz = -1; tz <= 1; tz++) {
@@ -163,16 +131,15 @@ __global__ __launch_bounds__(THREADS) BC_CUDA_TEMPLATE void conv3d_kernel(
 				const bc_act *tap = shared_weights +
 					(size_t)((tz + 1) * 9 + (ty + 1) * 3 + tx + 1) *
 					input_channels * CUDA_CS;
-				/* NULL marks a tap that falls outside the volume for this voxel. */
 				const bc_act *value[VPT];
 #pragma unroll
 				for (int v = 0; v < VPT; v++) {
 					int input_x = x[v] + tx * dilation;
 					int input_y = y[v] + ty * dilation;
 					int input_z = z[v] + tz * dilation;
-					int inside = ((unsigned)input_x < CUDA_DIM) &
+					int inside = valid[v] & ((unsigned)input_x < CUDA_DIM) &
 						((unsigned)input_y < CUDA_DIM) &
-						((unsigned)input_z < CUDA_DIM) & (voxel[v] < CUDA_NVOX);
+						((unsigned)input_z < CUDA_DIM);
 					size_t input_voxel = (size_t)input_z * CUDA_DIM * CUDA_DIM +
 						(size_t)input_y * CUDA_DIM + (size_t)input_x;
 					value[v] = inside ? source + input_voxel * input_stride : NULL;
@@ -183,12 +150,6 @@ __global__ __launch_bounds__(THREADS) BC_CUDA_TEMPLATE void conv3d_kernel(
 #pragma unroll
 					for (int output_channel = 0; output_channel < CUDA_MAX_CHANNELS;
 							output_channel++)
-						/* The weight buffer is pre-padded to CUDA_CS wide with
-						   zeros (bc_pack_padded_weights), so the tail lanes
-						   contribute nothing and no runtime bound is needed.
-						   Indexing this by output_channels instead is silently
-						   correct for a 16-channel model and silently WRONG for
-						   MindGrab's 15 -- it cost 1.3M voxels once. */
 						channel_weights[output_channel] =
 							__half2float(tap[(size_t)input_channel *
 								CUDA_CS + output_channel]);
@@ -207,70 +168,65 @@ __global__ __launch_bounds__(THREADS) BC_CUDA_TEMPLATE void conv3d_kernel(
 			}
 		}
 	}
+
+	double tsum[CUDA_CS], tsq[CUDA_CS];
+#pragma unroll
+	for (int c = 0; c < CUDA_CS; c++) { tsum[c] = 0.0; tsq[c] = 0.0; }
 #pragma unroll
 	for (int v = 0; v < VPT; v++) {
-		if (voxel[v] >= CUDA_NVOX) continue;
-		bc_act *output = destination + voxel[v] * CUDA_CS;
-		/* All CUDA_CS lanes, not just the logical channels: the pad lane's
-		   accumulator is zero (its weights were zeroed above), and writing it
-		   keeps the store contiguous and the buffer fully defined. */
+		if (!valid[v]) continue;
+		bc_act *output = destination + out_voxel[v] * CUDA_CS;
+		double wv = (double)rw[v];
 #pragma unroll
-		for (int channel = 0; channel < CUDA_CS; channel++)
-			output[channel] = __float2half(accumulator[v][channel]);
+		for (int channel = 0; channel < CUDA_CS; channel++) {
+			bc_act h = __float2half(accumulator[v][channel]);
+			output[channel] = h;
+			if (sums && rw[v] != 0.0f) {
+				double hv = (double)__half2float(h);
+				tsum[channel] += hv * wv;
+				tsq[channel] += hv * hv * wv;
+			}
+		}
+	}
+
+	if (sums) {
+		__syncthreads();
+		enum { NWARPS = THREADS / 32 };
+		double *sm_sum = (double *)conv_shared;
+		double *sm_sq = sm_sum + (size_t)NWARPS * CUDA_CS;
+		int warp = (int)threadIdx.x >> 5;
+		int lane = (int)threadIdx.x & 31;
+		for (int c = 0; c < CUDA_CS; c++) {
+			double s = tsum[c], q = tsq[c];
+#pragma unroll
+			for (int off = 16; off > 0; off >>= 1) {
+				s += __shfl_down_sync(0xffffffffu, s, off);
+				q += __shfl_down_sync(0xffffffffu, q, off);
+			}
+			if (lane == 0) {
+				sm_sum[warp * CUDA_CS + c] = s;
+				sm_sq[warp * CUDA_CS + c] = q;
+			}
+		}
+		__syncthreads();
+		if ((int)threadIdx.x < CUDA_CS) {
+			int c = (int)threadIdx.x;
+			double bs = 0.0, bq = 0.0;
+			for (int w = 0; w < NWARPS; w++) {
+				bs += sm_sum[w * CUDA_CS + c];
+				bq += sm_sq[w * CUDA_CS + c];
+			}
+			int slot = (int)(blockIdx.x & (CUDA_MOMENT_STRIPES - 1));
+			atomicAdd(sums + (size_t)slot * 2 * CUDA_CS + c, bs);
+			atomicAdd(sums + (size_t)slot * 2 * CUDA_CS + CUDA_CS + c, bq);
+		}
 	}
 }
 
-/*
- * Tensor-core convolution, for the hidden layers on sm_70 and newer.
- *
- * The whole convolution is a matmul hiding behind a stencil: for one tap,
- * out[voxel][oc] += sum_ic in[voxel + tapoffset][ic] * w[tap][ic][oc]. With the
- * channel stride padded to 16 that is exactly an m16n16k16 fragment -- M is 16
- * voxels, N the 16 output channels, K the 16 input channels -- so a warp
- * computes 16 voxels x 16 outputs by issuing 27 mma instructions, one per tap,
- * instead of 27 * 16 * 16 scalar FMAs.
- *
- * Three facts make the tiles line up, and all three are load-bearing:
- *
- *   - 16 divides DIM, so a 16-voxel tile never straddles a row. x is the
- *     fastest axis, so the tile's 16 voxels are 16 consecutive x positions in
- *     one (y, z) row and its 16x16 channel block is contiguous.
- *   - the activation stride is CUDA_CS, which is the fragment's leading
- *     dimension, so an in-bounds tile loads straight out of global memory.
- *   - the weights are already padded to 16x16 per tap, which is the only reason
- *     MindGrab's 15 channels can be expressed at all: a fragment has no way to
- *     say 15.
- *
- * Accumulation is fp32 inside the fragment. The ORDER differs from the scalar
- * kernel -- the hardware reduces K its own way -- so the two do not agree
- * bit-for-bit, which is why this kernel is not part of the tuner's
- * checksum-equality family.
- *
- * Layer 0 is deliberately excluded: it has one input channel and a stride-1
- * source, so K would be 1 and the fragment 15/16 zero. It stays on the scalar
- * kernel, which is also what keeps a working path on sm_60.
- */
 #if __CUDA_ARCH__ >= 700 || !defined(__CUDA_ARCH__)
 #include <mma.h>
 #endif
 
-/*
- * Does the code that will actually RUN on this device contain tensor-core
- * instructions? That is not the same question as "does the device have tensor
- * cores", and confusing the two produced a silently wrong segmentation.
- *
- * conv3d_wmma_kernel's body is compiled out below sm_70. A build restricted to
- * an older architecture -- `make CUDA_ARCH=sm_60`, which this project
- * advertises as the fast-iteration flag -- still RUNS on a modern card, because
- * compute_60 PTX JITs forward. The kernel that arrives is then the empty
- * fallback. Probing only properties.major would launch it, get cudaSuccess, and
- * never write the destination: measured 2,157,365 of 16,777,216 voxels wrong on
- * an RTX 4070 Ti SUPER, exit status 0.
- *
- * So ask the compiled code, not the device. This kernel is subject to exactly
- * the same #if as the convolution, so whatever the loader selects for this
- * device answers for itself.
- */
 BC_CUDA_GLOBAL __global__ void wmma_probe_kernel(int *out) {
 #if __CUDA_ARCH__ >= 700
 	*out = 1;
@@ -288,257 +244,253 @@ BC_CUDA_GLOBAL __global__ void wmma_probe_kernel(int *out) {
 template <int WARPS>
 __global__ __launch_bounds__(WARPS * 32) BC_CUDA_TEMPLATE void conv3d_wmma_kernel(
 		const bc_act *__restrict__ source, bc_act *__restrict__ destination,
-		const bc_act *__restrict__ weights, int dilation) {
+		const bc_act *__restrict__ weights, double *__restrict__ sums,
+		const unsigned int *__restrict__ row_list,
+		const float *__restrict__ row_weights, int row_count, int dilation) {
 #if __CUDA_ARCH__ >= 700
 	using namespace nvcuda;
 	extern __shared__ __align__(32) char wmma_shared[];
+	int warp = (int)threadIdx.x >> 5;
+	int lane = (int)threadIdx.x & 31;
+
+#if CUDA_CS == 24
+	/* Pre-padded [27][2][2][16][16] weights (54 KiB) stay in L1/L2 cache with
+	   ldm=16, removing 108 shared tile_b copies/tile and quadrupling SM occupancy. */
+	char *scratch_base = wmma_shared;
+#else
 	bc_act *staged = (bc_act *)wmma_shared;
 	const int weight_count = 27 * CUDA_CS * CUDA_CS;
 	char *scratch_base = wmma_shared + (size_t)weight_count * sizeof(bc_act);
+	for (int i = (int)threadIdx.x; i < weight_count; i += WARPS * 32)
+		staged[i] = weights[i];
+	__syncthreads();
+#endif
 
-	int warp = (int)threadIdx.x / 32;
-	int lane = (int)threadIdx.x % 32;
-	/* One scratch slot per warp, used first to stage a clipped input tile and
-	   afterwards to land the accumulator. The two uses do not overlap in time,
-	   so they share the space. */
 	char *scratch = scratch_base + (size_t)warp * CUDA_WMMA_SCRATCH;
 	bc_act *tile_staging = (bc_act *)scratch;
 	float *tile_output = (float *)scratch;
 
-	for (int i = (int)threadIdx.x; i < weight_count; i += WARPS * 32)
-		staged[i] = weights[i];
-	__syncthreads();
-
 	size_t tile = (size_t)blockIdx.x * WARPS + warp;
-	size_t base = tile * CUDA_WMMA_TILE;
-	if (base >= CUDA_NVOX) return;
-	int x0 = (int)(base & (CUDA_DIM - 1));
-	int y0 = (int)((base >> 8) & (CUDA_DIM - 1));
-	int z0 = (int)(base >> 16);
+	size_t total_tiles = row_list ? (size_t)row_count * (CUDA_DIM / CUDA_WMMA_TILE)
+		: (CUDA_NVOX / CUDA_WMMA_TILE);
+	int active = tile < total_tiles;
+	size_t base = 0;
+	int x0 = 0, y0 = 0, z0 = 0;
+	float rw = 0.0f;
+	if (active) {
+		if (row_list) {
+			size_t ridx = tile >> 4;
+			unsigned int row = row_list[ridx];
+			x0 = (int)((tile & 15) * CUDA_WMMA_TILE);
+			y0 = (int)(row & (CUDA_DIM - 1));
+			z0 = (int)(row >> 8);
+			base = (size_t)row * CUDA_DIM + (size_t)x0;
+			rw = row_weights ? row_weights[ridx] : 1.0f;
+		} else {
+			base = tile * CUDA_WMMA_TILE;
+			x0 = (int)(base & (CUDA_DIM - 1));
+			y0 = (int)((base >> 8) & (CUDA_DIM - 1));
+			z0 = (int)(base >> 16);
+			rw = 1.0f;
+		}
+	}
+
+	double wsum[2] = { 0.0, 0.0 }, wsq[2] = { 0.0, 0.0 };
+	int oc_lane = lane & 15;
+	int v0 = (lane >> 4) * 8;
 
 #if CUDA_CS == 24
-	/* Global rows stay compact. Both K and N tails are zero-padded in
-	 * aligned per-warp scratch; a 48-byte global row is not WMMA aligned
-	 * at every dilated spatial offset. A/B staging shares its 1 KiB with
-	 * the final fp32 output tile, whose lifetime starts after the last MMA. */
-	wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc[2];
-	wmma::fill_fragment(acc[0], 0.0f);
-	wmma::fill_fragment(acc[1], 0.0f);
-	bc_act *tile_b = tile_staging + 256;
-	for (int tz = -1; tz <= 1; tz++)
-	for (int ty = -1; ty <= 1; ty++)
-	for (int tx = -1; tx <= 1; tx++) {
-		int iy = y0 + ty * dilation, iz = z0 + tz * dilation;
-		int ix = x0 + tx * dilation;
-		if ((unsigned)iy >= CUDA_DIM || (unsigned)iz >= CUDA_DIM) continue;
-		const bc_act *tap = staged +
-			(size_t)((tz + 1) * 9 + (ty + 1) * 3 + tx + 1) * CUDA_CS * CUDA_CS;
-		size_t row = ((size_t)iz * CUDA_DIM + iy) * CUDA_DIM;
-#pragma unroll
-		for (int k = 0; k < 2; k++) {
-			for (int e = lane; e < 256; e += 32) {
-				int xx = ix + e / 16, ic = k * 16 + e % 16;
-				tile_staging[e] = ((unsigned)xx < CUDA_DIM && ic < CUDA_CS)
-					? source[(row + xx) * CUDA_CS + ic] : __float2half(0.0f);
-			}
-			__syncwarp();
-			wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a;
-			wmma::load_matrix_sync(a, tile_staging, 16);
-			__syncwarp();
-#pragma unroll
-			for (int n = 0; n < 2; n++) {
-				for (int e = lane; e < 256; e += 32) {
-					int ic = k * 16 + e / 16, oc = n * 16 + e % 16;
-					tile_b[e] = (ic < CUDA_CS && oc < CUDA_CS)
-						? tap[ic * CUDA_CS + oc] : __float2half(0.0f);
-				}
-				__syncwarp();
-				wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b;
-				wmma::load_matrix_sync(b, tile_b, 16);
-				wmma::mma_sync(acc[n], a, b, acc[n]);
-				__syncwarp();
-			}
-		}
-	}
-#pragma unroll
-	for (int n = 0; n < 2; n++) {
-		wmma::store_matrix_sync(tile_output, acc[n], 16, wmma::mem_row_major);
-		__syncwarp();
-		for (int e = lane; e < 256; e += 32) {
-			int oc = n * 16 + e % 16;
-			if (oc < CUDA_CS)
-				destination[(base + e / 16) * CUDA_CS + oc] = __float2half(tile_output[e]);
-		}
-		__syncwarp();
-	}
-#else
-	wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
-	wmma::fill_fragment(acc, 0.0f);
-
-	for (int tz = -1; tz <= 1; tz++) {
-		for (int ty = -1; ty <= 1; ty++) {
-			for (int tx = -1; tx <= 1; tx++) {
+	if (active) {
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc[2];
+		wmma::fill_fragment(acc[0], 0.0f);
+		wmma::fill_fragment(acc[1], 0.0f);
+		uint4 *stg4 = (uint4 *)tile_staging;
+		const uint4 z4 = make_uint4(0u, 0u, 0u, 0u);
+		for (int tz = -1; tz <= 1; tz++) {
+			int iz = z0 + tz * dilation;
+			if ((unsigned)iz >= CUDA_DIM) continue;
+			for (int ty = -1; ty <= 1; ty++) {
 				int iy = y0 + ty * dilation;
-				int iz = z0 + tz * dilation;
-				int ix = x0 + tx * dilation;
-				if ((unsigned)iy >= CUDA_DIM || (unsigned)iz >= CUDA_DIM)
-					continue;   /* whole tile outside: contributes nothing */
-				const bc_act *tap = staged +
-					(size_t)((tz + 1) * 9 + (ty + 1) * 3 + tx + 1) *
-					CUDA_CS * CUDA_CS;
-				size_t row = ((size_t)iz * CUDA_DIM + iy) * CUDA_DIM;
-				wmma::fragment<wmma::matrix_a, 16, 16, 16, __half,
-					wmma::row_major> a;
-				wmma::fragment<wmma::matrix_b, 16, 16, 16, __half,
-					wmma::row_major> b;
-				if (ix >= 0 && ix + CUDA_WMMA_TILE <= CUDA_DIM) {
-					/* Uniform across the warp, so this branch never diverges. */
-					wmma::load_matrix_sync(a,
-						source + (row + ix) * CUDA_CS, CUDA_CS);
-				} else {
-					for (int e = lane; e < CUDA_WMMA_TILE * CUDA_CS; e += 32) {
-						int voxel_in_tile = e / CUDA_CS;
-						int channel = e % CUDA_CS;
-						int xx = ix + voxel_in_tile;
-						tile_staging[e] = ((unsigned)xx < CUDA_DIM)
-							? source[(row + xx) * CUDA_CS + channel]
-							: __float2half(0.0f);
+				if ((unsigned)iy >= CUDA_DIM) continue;
+				size_t row = ((size_t)iz * CUDA_DIM + (size_t)iy) * CUDA_DIM;
+				int tap_zy = (tz + 1) * 9 + (ty + 1) * 3;
+				for (int tx = -1; tx <= 1; tx++) {
+					int ix = x0 + tx * dilation;
+					const bc_act *tap_w = weights + (size_t)(tap_zy + tx + 1) * 1024;
+					wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a0, a1;
+					wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b0, b1;
+					if (ix >= 0 && ix + CUDA_WMMA_TILE <= CUDA_DIM) {
+						/* Each 24-half voxel is 48 bytes (multiple of 16), so k=0
+						   loads directly with ldm=24 without staging. */
+						wmma::load_matrix_sync(a0, source + (row + (size_t)ix) * 24, 24);
+						wmma::load_matrix_sync(b0, tap_w, 16);
+						wmma::load_matrix_sync(b1, tap_w + 256, 16);
+						wmma::mma_sync(acc[0], a0, b0, acc[0]);
+						wmma::mma_sync(acc[1], a0, b1, acc[1]);
+						/* k=1 tail (ic=16..23) is 16-byte aligned: 1 uint4 load/lane. */
+						if (lane < 16)
+							stg4[lane * 2] = *(const uint4 *)(source + (row + (size_t)(ix + lane)) * 24 + 16);
+						else
+							stg4[(lane - 16) * 2 + 1] = z4;
+						__syncwarp();
+						wmma::load_matrix_sync(a1, tile_staging, 16);
+						wmma::load_matrix_sync(b0, tap_w + 512, 16);
+						wmma::load_matrix_sync(b1, tap_w + 768, 16);
+						wmma::mma_sync(acc[0], a1, b0, acc[0]);
+						wmma::mma_sync(acc[1], a1, b1, acc[1]);
+						__syncwarp();
+					} else {
+						int r = lane >> 1;
+						int half_row = lane & 1;
+						int xx = ix + r;
+						stg4[lane] = ((unsigned)xx < CUDA_DIM)
+							? *(const uint4 *)(source + (row + (size_t)xx) * 24 + half_row * 8)
+							: z4;
+						__syncwarp();
+						wmma::load_matrix_sync(a0, tile_staging, 16);
+						wmma::load_matrix_sync(b0, tap_w, 16);
+						wmma::load_matrix_sync(b1, tap_w + 256, 16);
+						wmma::mma_sync(acc[0], a0, b0, acc[0]);
+						wmma::mma_sync(acc[1], a0, b1, acc[1]);
+						__syncwarp();
+						if (lane < 16) {
+							int x1 = ix + lane;
+							stg4[lane * 2] = ((unsigned)x1 < CUDA_DIM)
+								? *(const uint4 *)(source + (row + (size_t)x1) * 24 + 16)
+								: z4;
+						} else {
+							stg4[(lane - 16) * 2 + 1] = z4;
+						}
+						__syncwarp();
+						wmma::load_matrix_sync(a1, tile_staging, 16);
+						wmma::load_matrix_sync(b0, tap_w + 512, 16);
+						wmma::load_matrix_sync(b1, tap_w + 768, 16);
+						wmma::mma_sync(acc[0], a1, b0, acc[0]);
+						wmma::mma_sync(acc[1], a1, b1, acc[1]);
+						__syncwarp();
 					}
-					__syncwarp();
-					wmma::load_matrix_sync(a, tile_staging, CUDA_CS);
-					__syncwarp();
 				}
-				wmma::load_matrix_sync(b, tap, CUDA_CS);
-				wmma::mma_sync(acc, a, b, acc);
 			}
 		}
-	}
-
-	wmma::store_matrix_sync(tile_output, acc, CUDA_CS, wmma::mem_row_major);
-	__syncwarp();
-	bc_act *out = destination + base * CUDA_CS;
-	for (int e = lane; e < CUDA_WMMA_TILE * CUDA_CS; e += 32)
-		out[e] = __float2half(tile_output[e]);
-#endif
-#else
-	/* Never launched below sm_70; the host checks the capability first. The
-	   body still has to compile for every architecture in the fatbin. */
-	(void)source; (void)destination; (void)weights; (void)dilation;
-#endif
-}
-
-/*
- * Per-channel sum and sum-of-squares over the activation buffer.
- *
- * The buffer is [voxel][channel] with the channel contiguous, so the obvious
- * shape -- one block row per channel, indexing source[i * channels + channel]
- * -- gives every lane of a warp a 64-byte stride. That is one 32-byte sector
- * fetched per useful 4-byte value, and it repeats for all `channels` rows, so
- * the pass moved roughly 16x the activation buffer.
- *
- * Instead each thread walks the buffer FLAT, so a warp reads 128 contiguous
- * bytes per instruction and the buffer is read exactly once. The trick that
- * makes this legal: the grid stride (gridDim.x * blockDim.x) is a multiple of
- * `channels`, so a thread's flat index keeps the same residue mod `channels`
- * for its whole walk -- one thread accumulates one channel, as before. The
- * block reduction then folds down to `channels` slots rather than to one.
- *
- * This DOES change the summation order, so the fp64 totals may differ in the
- * last bits from the row-per-channel version. That was already true run to run
- * -- the atomicAdd order across blocks is nondeterministic -- and both models
- * still agree with the CPU reference exactly. Measured: 308 ms -> 80 ms.
- *
- * The channel count need NOT be a power of two -- MindGrab's is 15 -- which is
- * why the fold below is an arithmetic walk rather than the usual halving tree.
- * The one requirement, that the grid stride be a multiple of it, is enforced at
- * the launch site.
- */
-static_assert(BC_MODEL_CHAN <= CUDA_REDUCE_THREADS,
-	"the block fold needs at least one thread per channel");
-/*
- * The real ceiling in this file. conv3d_kernel's accumulator is
- * [VPT][CUDA_MAX_CHANNELS] and is indexed by output channel, and
- * moments_finish_kernel launches exactly CUDA_MAX_CHANNELS threads, so a wider
- * model would overrun a register array and silently drop the tail channels'
- * moments. CLAUDE.md promises that adding a model needs no shared C changes;
- * this is one of the places that promise has a bound.
- */
-/*
- * norm_gelu_kernel indexes scale/bias by the 16-wide stride, so a model with an
- * affine must fill that stride exactly; otherwise the pad lane would read past
- * the compact arrays. True of model16 (16 channels, affine) and vacuous for
- * MindGrab (15 channels, no affine), which is why no padding is synthesised.
- */
-static_assert(!BC_MODEL_HAS_AFFINE || BC_MODEL_CHAN == CUDA_MAX_CHANNELS,
-	"an affine model must fill the activation stride; pad its scale/bias "
-	"before widening CUDA_CS beyond its channel count");
-static_assert(BC_MODEL_CHAN <= CUDA_MAX_CHANNELS,
-	"this backend's accumulator and moments kernel are sized by "
-	"CUDA_MAX_CHANNELS; raise it for a wider model");
-/*
- * There is deliberately NO `static_assert(BC_MODEL_NHIDDEN & 1)` in either
- * accelerator backend, though both carried one for a while. It guarded classify
- * against aliasing its source with its destination at an even layer count -- a
- * real race, since thread v writes labels[v] while reading
- * source[v * channels ...], and both classify_kernel parameters are
- * __restrict__. Neither needs it now: each derives its label buffer from the
- * SAME layer-count parity as `last`, so the two are never the same pointer at
- * ANY parity (see the comment at the classify_kernel launch). The restriction
- * on the model is gone rather than asserted away.
- */
-
-BC_CUDA_GLOBAL __global__ void reduce_channels_kernel(const bc_act *__restrict__ source,
-		double *__restrict__ sums, int channels) {
-	__shared__ double shared_sum[CUDA_REDUCE_THREADS];
-	__shared__ double shared_square[CUDA_REDUCE_THREADS];
-	size_t total = CUDA_NVOX * (size_t)channels;
-	size_t start = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-	size_t stride = (size_t)gridDim.x * blockDim.x;
-	double sum = 0.0, square = 0.0;
-	for (size_t i = start; i < total; i += stride) {
-		double value = __half2float(source[i]);
-		sum += value;
-		square += value * value;
-	}
-	shared_sum[threadIdx.x] = sum;
-	shared_square[threadIdx.x] = square;
-	__syncthreads();
-	/*
-	 * A halving tree cannot be used here: it pairs lane t with lane t + step,
-	 * which hold DIFFERENT channels unless the channel count divides every
-	 * step. MindGrab's is 15. So the first `channels` lanes each walk their own
-	 * arithmetic sequence instead -- about blockDim/channels adds, once per
-	 * block, which is nothing beside the buffer walk above.
-	 *
-	 * Lane t of this block holds channel (blockIdx.x * blockDim.x + t) %
-	 * channels, so the lanes belonging to channel c start at the offset that
-	 * makes that residue come out to c.
-	 */
-	int base = (int)(((size_t)blockIdx.x * blockDim.x) % (size_t)channels);
-	if ((int)threadIdx.x < channels) {
-		int first = ((int)threadIdx.x - base + channels) % channels;
-		double lane_sum = 0.0, lane_square = 0.0;
-		for (int i = first; i < (int)blockDim.x; i += channels) {
-			lane_sum += shared_sum[i];
-			lane_square += shared_square[i];
+#pragma unroll
+		for (int n = 0; n < 2; n++) {
+			wmma::store_matrix_sync(tile_output, acc[n], 16, wmma::mem_row_major);
+			__syncwarp();
+			int oc = n * 16 + oc_lane;
+			float ls = 0.0f, lq = 0.0f;
+			if (oc < CUDA_CS) {
+#pragma unroll
+				for (int v = 0; v < 8; v++) {
+					bc_act h = __float2half(tile_output[(v0 + v) * 16 + oc_lane]);
+					destination[(base + (size_t)(v0 + v)) * CUDA_CS + oc] = h;
+					float hv = __half2float(h);
+					ls += hv;
+					lq = fmaf(hv, hv, lq);
+				}
+			}
+			ls += __shfl_xor_sync(0xffffffffu, ls, 16);
+			lq += __shfl_xor_sync(0xffffffffu, lq, 16);
+			if (lane < 16 && oc < CUDA_CS) {
+				wsum[n] = (double)ls * (double)rw;
+				wsq[n] = (double)lq * (double)rw;
+			}
+			__syncwarp();
 		}
-		atomicAdd(sums + threadIdx.x, lane_sum);
-		atomicAdd(sums + channels + threadIdx.x, lane_square);
 	}
+#else
+	if (active) {
+		wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
+		wmma::fill_fragment(acc, 0.0f);
+		for (int tz = -1; tz <= 1; tz++) {
+			int iz = z0 + tz * dilation;
+			if ((unsigned)iz >= CUDA_DIM) continue;
+			for (int ty = -1; ty <= 1; ty++) {
+				int iy = y0 + ty * dilation;
+				if ((unsigned)iy >= CUDA_DIM) continue;
+				size_t row = ((size_t)iz * CUDA_DIM + (size_t)iy) * CUDA_DIM;
+				int tap_zy = (tz + 1) * 9 + (ty + 1) * 3;
+				for (int tx = -1; tx <= 1; tx++) {
+					int ix = x0 + tx * dilation;
+					const bc_act *tap = staged + (size_t)(tap_zy + tx + 1) * CUDA_CS * CUDA_CS;
+					wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a;
+					wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::row_major> b;
+					if (ix >= 0 && ix + CUDA_WMMA_TILE <= CUDA_DIM) {
+						wmma::load_matrix_sync(a, source + (row + (size_t)ix) * CUDA_CS, CUDA_CS);
+					} else {
+						uint4 *stg4 = (uint4 *)tile_staging;
+						int r = lane >> 1;
+						int half_row = lane & 1;
+						int xx = ix + r;
+						stg4[lane] = ((unsigned)xx < CUDA_DIM)
+							? *(const uint4 *)(source + (row + (size_t)xx) * 16 + half_row * 8)
+							: make_uint4(0u, 0u, 0u, 0u);
+						__syncwarp();
+						wmma::load_matrix_sync(a, tile_staging, CUDA_CS);
+						__syncwarp();
+					}
+					wmma::load_matrix_sync(b, tap, CUDA_CS);
+					wmma::mma_sync(acc, a, b, acc);
+				}
+			}
+		}
+		wmma::store_matrix_sync(tile_output, acc, CUDA_CS, wmma::mem_row_major);
+		__syncwarp();
+		float ls = 0.0f, lq = 0.0f;
+#pragma unroll
+		for (int v = 0; v < 8; v++) {
+			bc_act h = __float2half(tile_output[(v0 + v) * 16 + oc_lane]);
+			destination[(base + (size_t)(v0 + v)) * CUDA_CS + oc_lane] = h;
+			float hv = __half2float(h);
+			ls += hv;
+			lq = fmaf(hv, hv, lq);
+		}
+		ls += __shfl_xor_sync(0xffffffffu, ls, 16);
+		lq += __shfl_xor_sync(0xffffffffu, lq, 16);
+		if (lane < 16) {
+			wsum[0] = (double)ls * (double)rw;
+			wsq[0] = (double)lq * (double)rw;
+		}
+	}
+#endif
+
+	if (sums) {
+		__syncthreads();
+		double *sm_sum = (double *)scratch_base;
+		double *sm_sq = sm_sum + (size_t)WARPS * CUDA_CS;
+#if CUDA_CS == 24
+		if (lane < 16) {
+			sm_sum[warp * CUDA_CS + lane] = wsum[0];
+			sm_sq[warp * CUDA_CS + lane] = wsq[0];
+			if (lane < 8) {
+				sm_sum[warp * CUDA_CS + 16 + lane] = wsum[1];
+				sm_sq[warp * CUDA_CS + 16 + lane] = wsq[1];
+			}
+		}
+#else
+		if (lane < 16) {
+			sm_sum[warp * CUDA_CS + lane] = wsum[0];
+			sm_sq[warp * CUDA_CS + lane] = wsq[0];
+		}
+#endif
+		__syncthreads();
+		if ((int)threadIdx.x < CUDA_CS) {
+			int c = (int)threadIdx.x;
+			double bs = 0.0, bq = 0.0;
+			for (int w = 0; w < WARPS; w++) {
+				bs += sm_sum[w * CUDA_CS + c];
+				bq += sm_sq[w * CUDA_CS + c];
+			}
+			int slot = (int)(blockIdx.x & (CUDA_MOMENT_STRIPES - 1));
+			atomicAdd(sums + (size_t)slot * 2 * CUDA_CS + c, bs);
+			atomicAdd(sums + (size_t)slot * 2 * CUDA_CS + CUDA_CS + c, bq);
+		}
+	}
+#else
+	(void)source; (void)destination; (void)weights; (void)sums;
+	(void)row_list; (void)row_weights; (void)row_count; (void)dilation;
+#endif
 }
 
-/*
- * GELU, in the flavour this model declares -- the same two approximations
- * meshnet_cpu.c and webgpu_kernels.h select between, keyed off the same
- * generated macros.
- *
- * This used to be a single hardcoded expression, model16's, which meant a
- * MindGrab CUDA build silently ran the OTHER model's approximation. The two
- * agree closely (2.302208198144325 = 2 * 0.797884583 / ln 2), so it was
- * absorbed by the voxel tolerance rather than producing a visibly wrong
- * answer, which is exactly why it survived unnoticed: nothing in CI has ever
- * compiled this file.
- */
 #if BC_MODEL_GELU_TANH_RATIONAL
 #define CUDA_TANH_LIMIT 9.0f
 __device__ static inline float cuda_gelu(float x) {
@@ -568,146 +520,245 @@ __device__ static inline float cuda_gelu(float x) {
 #error "model_meta.json named a GELU flavour with no implementation here"
 #endif
 
-/*
- * Reduce the fp64 moment sums to per-channel (mean, inverse deviation).
- *
- * This used to live inside norm_gelu_kernel's voxel loop, which recomputed both
- * -- two fp64 divisions and an fp64 rsqrt -- once per voxel per channel, i.e.
- * 268M times per layer for a quantity that has only `channels` distinct values.
- * Consumer NVIDIA parts run fp64 at 1/64 rate, so that dominated the pass.
- * Hoisting it here is bit-identical: the arithmetic and the order of the casts
- * to float are unchanged, only the number of times it runs. Measured on an
- * RTX 4070 Ti SUPER: 457 ms -> 174 ms per MindGrab inference.
- *
- * One block of CUDA_MAX_CHANNELS threads; the work is 16 lanes wide.
- */
+/* Fold 256 FP64 moment stripes into fused (mul, add) = (invstd*gamma, beta - mean*mul). */
 BC_CUDA_GLOBAL __global__ void moments_finish_kernel(const double *__restrict__ sums,
-		float *__restrict__ mean_out, float *__restrict__ invstd_out,
-		int channels) {
-	int channel = (int)threadIdx.x;
-	if (channel >= channels) return;
-	double mean = sums[channel] / (double)CUDA_NVOX;
-	double variance = sums[channels + channel] / (double)CUDA_NVOX - mean * mean;
+		float *__restrict__ mul_out, float *__restrict__ add_out,
+		const float *__restrict__ scale, const float *__restrict__ bias, int channels) {
+	int c = (int)threadIdx.x;
+	if (c >= channels) return;
+	double sum = 0.0, sq = 0.0;
+	for (int s = 0; s < CUDA_MOMENT_STRIPES; s++) {
+		sum += sums[(size_t)s * 2 * CUDA_CS + c];
+		sq += sums[(size_t)s * 2 * CUDA_CS + CUDA_CS + c];
+	}
+	double mean = sum / (double)CUDA_NVOX;
+	double variance = sq / (double)CUDA_NVOX - mean * mean;
 	if (variance < 0.0) variance = 0.0;
-	mean_out[channel] = (float)mean;
-	invstd_out[channel] = (float)rsqrt(variance + 1e-5);
+	float invstd = (float)rsqrt(variance + 1e-5);
+	float gamma = scale ? scale[c] : 1.0f;
+	float beta = bias ? bias[c] : 0.0f;
+	float mul = invstd * gamma;
+	mul_out[c] = mul;
+	add_out[c] = beta - (float)mean * mul;
 }
 
-BC_CUDA_GLOBAL __global__ void norm_gelu_kernel(bc_act *buffer,
-		const float *__restrict__ mean, const float *__restrict__ invstd,
-		const float *scale, const float *bias, int channels) {
-	size_t voxel = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-	if (voxel >= CUDA_NVOX) return;
-	bc_act *row = buffer + voxel * CUDA_CS;
-	/* Runs to CUDA_CS, not the logical count, so the loop bound is a literal
-	   and the pad lane keeps its inert zero rather than being left undefined.
-	   The affine arrays are indexed by the same bound, which the static_assert
-	   below pins to models whose channel count already fills the stride. */
+/* 100% coalesced half2 GroupNorm+affine+GELU over active rows. */
+BC_CUDA_GLOBAL __global__ void norm_gelu_kernel(bc_act *__restrict__ buffer,
+		const float *__restrict__ mul, const float *__restrict__ add,
+		const unsigned int *__restrict__ row_list, int row_count) {
+	enum { PAIRS_PER_VOX = CUDA_CS / 2, PAIRS_PER_ROW = CUDA_DIM * PAIRS_PER_VOX };
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)row_count * PAIRS_PER_ROW;
+	if (idx >= total) return;
+	size_t r = idx / PAIRS_PER_ROW;
+	size_t off = idx - r * PAIRS_PER_ROW;
+	unsigned int row = row_list ? row_list[r] : (unsigned int)r;
+	int c0 = (int)((off % PAIRS_PER_VOX) * 2);
+	__half2 *ptr = (__half2 *)(buffer + (size_t)row * CUDA_DIM * CUDA_CS) + off;
+	float2 f = __half22float2(*ptr);
+	f.x = cuda_gelu(fmaf(f.x, mul[c0], add[c0]));
+	f.y = cuda_gelu(fmaf(f.y, mul[c0 + 1], add[c0 + 1]));
+	*ptr = __float22half2_rn(f);
+}
+
+/* Coalesced uint4 copy from representative pure background row to npure rows. */
+BC_CUDA_GLOBAL __global__ void fill_rows_kernel(bc_act *__restrict__ buffer,
+		const unsigned int *__restrict__ pure_list, int npure, int rep_row) {
+	enum { U4_PER_ROW = (CUDA_DIM * CUDA_CS * sizeof(bc_act)) / sizeof(uint4) };
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)npure * U4_PER_ROW;
+	if (idx >= total) return;
+	size_t r = idx / U4_PER_ROW;
+	size_t off = idx - r * U4_PER_ROW;
+	unsigned int dst_row = pure_list[r];
+	const uint4 *src = (const uint4 *)(buffer + (size_t)rep_row * CUDA_DIM * CUDA_CS);
+	uint4 *dst = (uint4 *)(buffer + (size_t)dst_row * CUDA_DIM * CUDA_CS);
+	dst[off] = src[off];
+}
+
+/* Fused final GroupNorm+GELU + shared-weight 1x1 classifier -> uint8 labels. */
+BC_CUDA_GLOBAL __global__ void classify_u8_kernel(const bc_act *__restrict__ source,
+		unsigned char *__restrict__ labels, const float *__restrict__ mul,
+		const float *__restrict__ add, const bc_act *__restrict__ weights,
+		const bc_act *__restrict__ bias, const unsigned int *__restrict__ row_list,
+		int row_count, int channels, int classes) {
+	__shared__ bc_act sh_w[BC_MODEL_CHAN * BC_MODEL_NCLASS];
+	__shared__ bc_act sh_b[BC_MODEL_NCLASS];
+	int wc = channels * classes;
+	for (int i = (int)threadIdx.x; i < wc; i += (int)blockDim.x) sh_w[i] = weights[i];
+	if (bias) {
+		for (int i = (int)threadIdx.x; i < classes; i += (int)blockDim.x) sh_b[i] = bias[i];
+	}
+	__syncthreads();
+
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)row_count * CUDA_DIM;
+	if (idx >= total) return;
+	unsigned int row = row_list ? row_list[idx >> 8] : (unsigned int)(idx >> 8);
+	size_t voxel = (size_t)row * CUDA_DIM + (idx & 255);
+	const bc_act *src = source + voxel * CUDA_CS;
+	float val[BC_MODEL_CHAN];
 #pragma unroll
-	for (int channel = 0; channel < CUDA_CS; channel++) {
-		float value = (__half2float(row[channel]) - mean[channel]) *
-			invstd[channel];
-		if (scale) value = value * scale[channel] + bias[channel];
-		row[channel] = __float2half(cuda_gelu(value));
+	for (int c = 0; c < BC_MODEL_CHAN; c++) {
+		float v = __half2float(src[c]);
+		if (mul) v = cuda_gelu(fmaf(v, mul[c], add[c]));
+		val[c] = v;
 	}
-	(void)channels;
-}
-
-BC_CUDA_GLOBAL __global__ void classify_kernel(const bc_act *__restrict__ source,
-		float *__restrict__ labels, const bc_act *__restrict__ weights,
-		const bc_act *__restrict__ bias, int channels, int classes) {
-	size_t voxel = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-	if (voxel >= CUDA_NVOX) return;
-	/* Strides by CUDA_CS but sums only the LOGICAL channels: the classifier
-	   weight matrix is [channels][classes] and has no row for the pad lane, so
-	   running this loop to CUDA_CS would read past it. */
-	const bc_act *value = source + voxel * CUDA_CS;
 	int best_class = 0;
-	float best_value = bias ? __half2float(bias[0]) : 0.0f;
-	for (int channel = 0; channel < channels; channel++)
-		best_value = fmaf(__half2float(value[channel]),
-			__half2float(weights[channel * classes]), best_value);
-	for (int class_index = 1; class_index < classes; class_index++) {
-		float candidate = bias ? __half2float(bias[class_index]) : 0.0f;
-		for (int channel = 0; channel < channels; channel++)
-			candidate = fmaf(__half2float(value[channel]),
-				__half2float(weights[channel * classes + class_index]), candidate);
-		if (candidate > best_value) {
-			best_value = candidate;
-			best_class = class_index;
-		}
+	float best_value = bias ? __half2float(sh_b[0]) : 0.0f;
+#pragma unroll
+	for (int c = 0; c < BC_MODEL_CHAN; c++)
+		best_value = fmaf(val[c], __half2float(sh_w[c * classes]), best_value);
+	for (int k = 1; k < classes; k++) {
+		float cand = bias ? __half2float(sh_b[k]) : 0.0f;
+#pragma unroll
+		for (int c = 0; c < BC_MODEL_CHAN; c++)
+			cand = fmaf(val[c], __half2float(sh_w[c * classes + k]), cand);
+		if (cand > best_value) { best_value = cand; best_class = k; }
 	}
-	labels[voxel] = (float)best_class;
+	labels[voxel] = (unsigned char)best_class;
 }
 
-/* Four priors, never 18 materialized logit volumes. The destination is the
- * dead activation buffer, disjoint from the final hidden activation. */
+BC_CUDA_GLOBAL __global__ void fill_labels_u8_kernel(unsigned char *__restrict__ labels,
+		const unsigned int *__restrict__ pure_list, int npure, int rep_row) {
+	enum { U4_PER_ROW = CUDA_DIM / sizeof(uint4) };
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)npure * U4_PER_ROW;
+	if (idx >= total) return;
+	size_t r = idx / U4_PER_ROW;
+	size_t off = idx - r * U4_PER_ROW;
+	const uint4 *src = (const uint4 *)(labels + (size_t)rep_row * CUDA_DIM);
+	uint4 *dst = (uint4 *)(labels + (size_t)pure_list[r] * CUDA_DIM);
+	dst[off] = src[off];
+}
+
+/* Fused final GroupNorm+GELU (when mul != NULL) + grouped-softmax tissue priors. */
 BC_CUDA_GLOBAL __global__ void tissue_priors_kernel(const bc_act *__restrict__ source,
-		float *__restrict__ planes, const bc_act *__restrict__ weights,
-		const bc_act *__restrict__ bias, int channels, int classes) {
+		float *__restrict__ planes, const float *__restrict__ mul,
+		const float *__restrict__ add, const bc_act *__restrict__ weights,
+		const bc_act *__restrict__ bias, const unsigned int *__restrict__ row_list,
+		int row_count, int channels, int classes) {
 #if BC_MODEL_NCLASS == 18 && !BC_MODEL_OUTPUT_IS_MASK
-	size_t voxel = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-	if (voxel >= CUDA_NVOX) return;
-	const bc_act *value = source + voxel * CUDA_CS;
+	__shared__ bc_act sh_w[BC_MODEL_CHAN * 18];
+	__shared__ bc_act sh_b[18];
+	int wc = channels * 18;
+	for (int i = (int)threadIdx.x; i < wc; i += (int)blockDim.x) sh_w[i] = weights[i];
+	if (bias && (int)threadIdx.x < 18) sh_b[threadIdx.x] = bias[threadIdx.x];
+	__syncthreads();
+
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)row_count * CUDA_DIM;
+	if (idx >= total) return;
+	unsigned int row = row_list ? row_list[idx >> 8] : (unsigned int)(idx >> 8);
+	size_t voxel = (size_t)row * CUDA_DIM + (idx & 255);
+	const bc_act *src = source + voxel * CUDA_CS;
+	float val[BC_MODEL_CHAN];
+#pragma unroll
+	for (int c = 0; c < BC_MODEL_CHAN; c++) {
+		float v = __half2float(src[c]);
+		if (mul) v = cuda_gelu(fmaf(v, mul[c], add[c]));
+		val[c] = v;
+	}
 	float logits[18], maximum = -INFINITY;
-	for (int c = 0; c < 18; c++) {
-		float sum = bias ? __half2float(bias[c]) : 0.0f;
-		for (int ch = 0; ch < channels; ch++)
-			sum = fmaf(__half2float(value[ch]), __half2float(weights[ch * classes + c]), sum);
-		logits[c] = sum;
+	for (int k = 0; k < 18; k++) {
+		float sum = bias ? __half2float(sh_b[k]) : 0.0f;
+#pragma unroll
+		for (int ch = 0; ch < BC_MODEL_CHAN; ch++)
+			sum = fmaf(val[ch], __half2float(sh_w[ch * classes + k]), sum);
+		logits[k] = sum;
 		maximum = fmaxf(maximum, sum);
 	}
 	const unsigned masks[3] = {BC_PRIOR_GM_MASK, BC_PRIOR_WM_MASK, BC_PRIOR_CSF_MASK};
 	float denominator = 0.0f, support_denominator = 0.0f;
 	float numerator[3] = {0.0f, 0.0f, 0.0f}, background = 0.0f;
-	for (int c = 0; c < 18; c++) {
-		float centered = logits[c] - maximum;
+	for (int k = 0; k < 18; k++) {
+		float centered = logits[k] - maximum;
 		float weight = expf(centered / BC_PRIOR_TEMPERATURE);
 		float support = expf(centered / BC_PRIOR_SUPPORT_TEMPERATURE);
 		denominator += weight;
 		support_denominator += support;
-		if (c == 0) background = support;
+		if (k == 0) background = support;
 		for (int t = 0; t < 3; t++)
-			if (masks[t] & (1u << c)) numerator[t] += weight;
+			if (masks[t] & (1u << k)) numerator[t] += weight;
+		if (BC_PRIOR_MIXED_GWM_MASK & (1u << k)) {
+			float half = 0.5f * weight;
+			numerator[0] += half;
+			numerator[1] += half;
+		}
 	}
 	for (int t = 0; t < 3; t++) planes[(size_t)t * CUDA_NVOX + voxel] = numerator[t] / denominator;
 	planes[3 * CUDA_NVOX + voxel] = fminf(1.0f, fmaxf(0.0f, 1.0f - background / support_denominator));
 #else
-	(void)source; (void)planes; (void)weights; (void)bias; (void)channels; (void)classes;
+	(void)source; (void)planes; (void)mul; (void)add;
+	(void)weights; (void)bias; (void)row_list; (void)row_count; (void)channels; (void)classes;
 #endif
 }
 
-/*
- * Fingerprint the convolution output EXACTLY.
- *
- * Summing the floats would not work: a candidate is timed against a reference
- * whose blocks finish in a different order, and fp addition is not associative,
- * so a correct variant would look wrong. Reinterpreting each float as an
- * integer and summing that in 64 bits is associative and commutative, so the
- * checksum is independent of block scheduling while still changing if any
- * single output bit changes.
- */
+BC_CUDA_GLOBAL __global__ void fill_priors_kernel(float *__restrict__ planes,
+		const unsigned int *__restrict__ pure_list, int npure, int rep_row) {
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	size_t total = (size_t)npure * CUDA_DIM;
+	if (idx >= total) return;
+	unsigned int dst_row = pure_list[idx >> 8];
+	size_t x = idx & 255;
+	size_t src_v = (size_t)rep_row * CUDA_DIM + x;
+	size_t dst_v = (size_t)dst_row * CUDA_DIM + x;
+	for (int p = 0; p < 4; p++)
+		planes[(size_t)p * CUDA_NVOX + dst_v] = planes[(size_t)p * CUDA_NVOX + src_v];
+}
+
+/* GPU 3-axis separable Gaussian blur + support gate for --pve (matching Metal/WebGPU). */
+BC_CUDA_GLOBAL __global__ void pve_blur_kernel(const float *__restrict__ src,
+		float *__restrict__ dst, int axis) {
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= 3 * CUDA_NVOX) return;
+	size_t p = idx / CUDA_NVOX;
+	size_t v = idx - p * CUDA_NVOX;
+	size_t stride = axis == 0 ? 1u : (axis == 1 ? 256u : 65536u);
+	int coord = (int)((v / stride) & 255u);
+	/* Matches BC_PVE_BLUR_SIGMA (0.65) in cat_lite.h. */
+	const float sigma = 0.65f;
+	const int radius = (int)(3.0f * sigma + 0.5f);
+	const float inv2s2 = -0.5f / (sigma * sigma);
+	const float *plane = src + p * CUDA_NVOX;
+	float sum = 0.0f, total = 0.0f;
+	for (int d = -radius; d <= radius; d++) {
+		float wt = expf((float)(d * d) * inv2s2);
+		total += wt;
+		int q = coord + d;
+		if ((unsigned)q < 256u)
+			sum += wt * plane[(size_t)((ptrdiff_t)v + (ptrdiff_t)d * (ptrdiff_t)stride)];
+	}
+	dst[idx] = sum / total;
+}
+
+BC_CUDA_GLOBAL __global__ void pve_support_kernel(const float *__restrict__ blurred,
+		float *__restrict__ planes) {
+	size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= 3 * CUDA_NVOX) return;
+	size_t v = idx % CUDA_NVOX;
+	float sup = fminf(1.0f, fmaxf(0.0f, planes[3 * CUDA_NVOX + v]));
+	planes[idx] = blurred[idx] * sup;
+}
+
 BC_CUDA_GLOBAL __global__ void checksum_kernel(const bc_act *__restrict__ source,
 		unsigned long long *__restrict__ total, size_t count) {
 	size_t start = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
 	size_t stride = (size_t)gridDim.x * blockDim.x;
 	unsigned long long local = 0;
 	for (size_t i = start; i < count; i += stride)
-		local += (unsigned long long)__half_as_ushort(source[i]);
+		local += (unsigned short)__half_as_ushort(source[i]);
 	atomicAdd(total, local);
 }
 
-/* A deterministic, non-degenerate pattern to tune against. */
-BC_CUDA_GLOBAL __global__ void fill_pattern_kernel(bc_act *buffer, size_t count) {
+BC_CUDA_GLOBAL __global__ void fill_pattern_kernel(bc_act *__restrict__ buffer,
+		size_t count) {
 	size_t start = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
 	size_t stride = (size_t)gridDim.x * blockDim.x;
 	for (size_t i = start; i < count; i += stride) {
-		unsigned int h = (unsigned int)i * 2654435761u;
-		buffer[i] = __float2half((float)(h >> 8) * (1.0f / 16777216.0f) - 0.5f);
+		unsigned x = (unsigned)i * 2654435761u;
+		buffer[i] = __float2half((float)((int)(x & 1023u) - 512) * 0.001f);
 	}
 }
 
-#undef BC_CUDA_GLOBAL
-#undef BC_CUDA_TEMPLATE
-
-#endif /* BRAINCHOP_CUDA_KERNELS_CUH */
+#endif

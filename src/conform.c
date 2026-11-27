@@ -6,9 +6,97 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct {
+	float *img;
+	size_t n;
+	float lo, hi, src_min, scale;
+	int nchunks;
+} scalecrop_ctx;
+
+static void scalecrop_chunk(void *ctx, int c0, int c1) {
+	const scalecrop_ctx *c = ctx;
+	float *img = c->img;
+	const float lo = c->lo, hi = c->hi, src_min = c->src_min, scale = c->scale;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->n / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->n / (size_t)c->nchunks;
+		for (size_t i = i0; i < i1; i++)
+			img[i] = fminf(fmaxf(lo + scale * (img[i] - src_min), lo), hi);
+	}
+}
+
 static void scalecrop(float *img, size_t n, float lo, float hi, float src_min, float scale) {
-	for (size_t i = 0; i < n; i++)
-		img[i] = fminf(fmaxf(lo + scale * (img[i] - src_min), lo), hi);
+	if (!n) return;
+	if (n < 65536) {
+		for (size_t i = 0; i < n; i++)
+			img[i] = fminf(fmaxf(lo + scale * (img[i] - src_min), lo), hi);
+		return;
+	}
+	scalecrop_ctx ctx = { .img = img, .n = n, .lo = lo, .hi = hi,
+		.src_min = src_min, .scale = scale, .nchunks = 64 };
+	bc_parallel_for(0, ctx.nchunks - 1, 1, scalecrop_chunk, &ctx);
+}
+
+#define CONF_HIST_CHUNKS 32
+
+typedef struct {
+	float *img;
+	size_t n;
+	int nchunks;
+	float cmin[CONF_HIST_CHUNKS];
+	float cmax[CONF_HIST_CHUNKS];
+	size_t cnz[CONF_HIST_CHUNKS];
+	size_t cnltz[CONF_HIST_CHUNKS];
+} scale_scan_ctx;
+
+static void scale_scan_chunk(void *ctx, int c0, int c1) {
+	scale_scan_ctx *c = ctx;
+	float *img = c->img;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->n / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->n / (size_t)c->nchunks;
+		float mn = INFINITY, mx = -INFINITY;
+		size_t nz = 0, nltz = 0;
+		for (size_t i = i0; i < i1; i++) {
+			float v = img[i];
+			if (!isfinite(v)) {
+				v = 0.0f;
+				img[i] = 0.0f;
+			}
+			if (v < mn) mn = v;
+			if (v > mx) mx = v;
+			nz += fabsf(v) >= 1e-15f;
+			nltz += v < 0.0f;
+		}
+		c->cmin[ch] = mn;
+		c->cmax[ch] = mx;
+		c->cnz[ch] = nz;
+		c->cnltz[ch] = nltz;
+	}
+}
+
+typedef struct {
+	const float *img;
+	size_t n;
+	int nchunks;
+	float src_min, bin_size;
+	int *hists; /* nchunks * 1000 */
+} scale_hist_ctx;
+
+static void scale_hist_chunk(void *ctx, int c0, int c1) {
+	const scale_hist_ctx *c = ctx;
+	const float *img = c->img;
+	const float src_min = c->src_min, bin_size = c->bin_size;
+	for (int ch = c0; ch <= c1; ch++) {
+		size_t i0 = (size_t)ch * c->n / (size_t)c->nchunks;
+		size_t i1 = (size_t)(ch + 1) * c->n / (size_t)c->nchunks;
+		int *h = c->hists + (size_t)ch * 1000;
+		for (size_t i = i0; i < i1; i++) {
+			float raw = (img[i] - src_min) / bin_size;
+			int bin = !(raw > 0.0f) ? 0 : !(raw < 999.0f) ? 999 : (int)raw;
+			h[bin]++;
+		}
+	}
 }
 
 /* This is niimath conform's training-intensity transform, reduced to the
@@ -19,18 +107,18 @@ static void scalecrop(float *img, size_t n, float lo, float hi, float src_min, f
  * BSD-2-Clause, Chris Rorden's Lab -- see THIRD_PARTY_NOTICES.md. */
 static int scale_intensity(float *img, size_t n) {
 	if (!n) return 0;
+	int nchunks = n >= 65536 ? CONF_HIST_CHUNKS : 1;
+	scale_scan_ctx sc;
+	memset(&sc, 0, sizeof(sc));
+	sc.img = img; sc.n = n; sc.nchunks = nchunks;
+	bc_parallel_for(0, nchunks - 1, 1, scale_scan_chunk, &sc);
 	float src_min = INFINITY, src_max = -INFINITY;
 	size_t nz = 0, nltz = 0;
-	for (size_t i = 0; i < n; i++) {
-		float v = img[i];
-		if (!isfinite(v)) {
-			v = 0.0f;
-			img[i] = 0.0f;
-		}
-		if (v < src_min) src_min = v;
-		if (v > src_max) src_max = v;
-		nz += fabsf(v) >= 1e-15f;
-		nltz += v < 0.0f;
+	for (int ch = 0; ch < nchunks; ch++) {
+		if (sc.cmin[ch] < src_min) src_min = sc.cmin[ch];
+		if (sc.cmax[ch] > src_max) src_max = sc.cmax[ch];
+		nz += sc.cnz[ch];
+		nltz += sc.cnltz[ch];
 	}
 	if (src_min < 0.0f && 100.0 * (double)nltz / (double)n < 2.0)
 		src_min = 0.0f;
@@ -38,17 +126,20 @@ static int scale_intensity(float *img, size_t n) {
 	float fspan = src_max - src_min;
 	float bin_size = isfinite(fspan) ? fspan / 1000.0f : (float)(span / 1000.0);
 	if (!isfinite(bin_size) || !(bin_size > 0.0f)) {
-		for (size_t i = 0; i < n; i++)
-			img[i] = fminf(fmaxf(img[i], 0.0f), 255.0f);
+		scalecrop(img, n, 0.0f, 255.0f, 0.0f, 1.0f);
 		return 0;
 	}
-	int *hist = calloc(1000, sizeof(*hist));
-	if (!hist) return 1;
-	for (size_t i = 0; i < n; i++) {
-		float raw = (img[i] - src_min) / bin_size;
-		int bin = !(raw > 0.0f) ? 0 : !(raw < 999.0f) ? 999 : (int)raw;
-		hist[bin]++;
+	int *hists = calloc((size_t)nchunks * 1000, sizeof(*hists));
+	if (!hists) return 1;
+	scale_hist_ctx hc = { .img = img, .n = n, .nchunks = nchunks,
+		.src_min = src_min, .bin_size = bin_size, .hists = hists };
+	bc_parallel_for(0, nchunks - 1, 1, scale_hist_chunk, &hc);
+	int hist[1000] = {0};
+	for (int ch = 0; ch < nchunks; ch++) {
+		const int *h = hists + (size_t)ch * 1000;
+		for (int b = 0; b < 1000; b++) hist[b] += h[b];
 	}
+	free(hists);
 	size_t nth = n - (size_t)(0.02 * (double)nz);
 	size_t cumulative = 0, idx = 0;
 	for (; idx < 999; idx++) {
@@ -58,23 +149,22 @@ static int scale_intensity(float *img, size_t n) {
 	src_max = idx * bin_size + src_min;
 	float scale = src_min != src_max ? 255.0f / (src_max - src_min) : 1.0f;
 	scalecrop(img, n, 0.0f, 255.0f, src_min, scale);
-	free(hist);
 	return 0;
 }
 
 /* niimath `-comply ... f_high=1`: subtract the accepted minimum and clamp. */
 static void scale_intensity_full_range(float *img, size_t n) {
 	if (!n) return;
+	int nchunks = n >= 65536 ? CONF_HIST_CHUNKS : 1;
+	scale_scan_ctx sc;
+	memset(&sc, 0, sizeof(sc));
+	sc.img = img; sc.n = n; sc.nchunks = nchunks;
+	bc_parallel_for(0, nchunks - 1, 1, scale_scan_chunk, &sc);
 	float src_min = INFINITY;
 	size_t nltz = 0;
-	for (size_t i = 0; i < n; i++) {
-		float v = img[i];
-		if (!isfinite(v)) {
-			v = 0.0f;
-			img[i] = 0.0f;
-		}
-		if (v < src_min) src_min = v;
-		nltz += v < 0.0f;
+	for (int ch = 0; ch < nchunks; ch++) {
+		if (sc.cmin[ch] < src_min) src_min = sc.cmin[ch];
+		nltz += sc.cnltz[ch];
 	}
 	if (src_min < 0.0f && 100.0 * (double)nltz / (double)n < 2.0)
 		src_min = 0.0f;

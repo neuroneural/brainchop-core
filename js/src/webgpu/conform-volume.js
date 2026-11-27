@@ -439,6 +439,7 @@ export function conformVolumeData({
   inferenceFHigh = null,
   ct = false,
   comply = false,
+  rejectConstant = false,
 }) {
   let nx = dims[1] | 0;
   let ny = dims[2] | 0;
@@ -464,13 +465,18 @@ export function conformVolumeData({
   let vol = new Float32Array(nvox);
   const isBigInt = raw instanceof BigInt64Array || raw instanceof BigUint64Array;
   let finiteCount = 0;
+  let rawMin = Infinity;
+  let rawMax = -Infinity;
 
   if (isBigInt) {
     for (let i = 0; i < nvox; i++) {
-      const v = Number(raw[i]) * slope + inter;
+      const rv = Number(raw[i]);
+      const v = rv * slope + inter;
       if (Number.isFinite(v)) {
         vol[i] = v;
         finiteCount++;
+        if (rv < rawMin) rawMin = rv;
+        if (rv > rawMax) rawMax = rv;
       } else {
         vol[i] = 0;
       }
@@ -481,16 +487,21 @@ export function conformVolumeData({
       if (Number.isFinite(v)) {
         vol[i] = v;
         finiteCount++;
+        if (v < rawMin) rawMin = v;
+        if (v > rawMax) rawMax = v;
       } else {
         vol[i] = 0;
       }
     }
   } else {
     for (let i = 0; i < nvox; i++) {
-      const v = raw[i] * slope + inter;
+      const rv = raw[i];
+      const v = rv * slope + inter;
       if (Number.isFinite(v)) {
         vol[i] = v;
         finiteCount++;
+        if (rv < rawMin) rawMin = rv;
+        if (rv > rawMax) rawMax = rv;
       } else {
         vol[i] = 0;
       }
@@ -498,7 +509,16 @@ export function conformVolumeData({
   }
 
   if (finiteCount === 0) {
-    throw new Error('Input volume contains no finite voxel values.');
+    throw new Error(
+      rejectConstant
+        ? 'brainchopc: input has no finite voxels'
+        : 'Input volume contains no finite voxel values.'
+    );
+  }
+  if (rejectConstant && rawMin === rawMax) {
+    throw new Error(
+      `brainchopc: input image is constant (all ${finiteCount} finite voxels equal ${rawMin}; zero contrast)`
+    );
   }
 
   if (ct) {

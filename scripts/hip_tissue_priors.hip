@@ -34,6 +34,11 @@ extern "C" __global__ void bc_hip_tissue_priors(
 		if (c == 0) background = support;
 		for (int tissue = 0; tissue < 3; tissue++)
 			if (masks[tissue] & (1u << c)) numerator[tissue] += weight;
+		if (BC_PRIOR_MIXED_GWM_MASK & (1u << c)) {
+			float half = 0.5f * weight;
+			numerator[0] += half;
+			numerator[1] += half;
+		}
 	}
 	for (int tissue = 0; tissue < 3; tissue++)
 		planes[(size_t)tissue * BC_HIP_NVOX + voxel] =

@@ -44,11 +44,13 @@ typedef uint16_t bc_act;
 #define CUDA_WMMA_WARPS BC_CUDA_MODULE_WMMA_WARPS
 #define CUDA_WMMA_SCRATCH BC_CUDA_MODULE_WMMA_SCRATCH
 #define CUDA_NVOX ((size_t)CUDA_DIM * CUDA_DIM * CUDA_DIM)
+#define CUDA_ROWS ((int)(CUDA_DIM * CUDA_DIM))
+#define CUDA_MOMENT_STRIPES 256
 _Static_assert(CUDA_DIM == BRAINCHOP_MODEL_DIM, "module/model dimensions differ");
 _Static_assert(BC_MODEL_CHAN <= CUDA_CS, "model exceeds module stride");
 _Static_assert(!BC_MODEL_HAS_AFFINE || BC_MODEL_CHAN == CUDA_CS, "affine stride mismatch");
 _Static_assert(sizeof(void *) == 8 && sizeof(size_t) == 8, "64-bit module ABI required");
-_Static_assert(BC_CUDA_MODULE_ABI == 2, "review host launch contract for new module ABI");
+_Static_assert(BC_CUDA_MODULE_ABI == 3, "review host launch contract for new module ABI");
 
 typedef CUresult gpu_error_t;
 typedef CUevent gpu_event;
@@ -106,9 +108,6 @@ static int driver_load(void) {
     return 0;
 }
 
-/* Quiet discovery preserves CPU/other-backend selection without an NVIDIA
- * driver. Ordinals are never filtered or renumbered, including heterogeneous
- * hosts and CUDA_VISIBLE_DEVICES. Unsupported hardware fails at module load. */
 static int cuda_adapter_count(void) {
     int count = 0;
     if (driver_load() || d.device_count(&count)) return 0;
@@ -179,9 +178,6 @@ static int gpu_begin(int ordinal) {
 #define X(id, symbol) if (cuda_error(d.function_get(&id, module, symbol), symbol)) goto fail;
     BC_CUDA_MODULE_AUX(X)
 #undef X
-    /* FNV-1a identifies the actual embedded bytes for tuning (not security).
-     * Include ABI and forced-JIT controls so native/PTX trials cannot share a
-     * cached optimum. Source/model integrity is checked by cuda-modules-check. */
     uint64_t hash = UINT64_C(14695981039346656037);
     size_t bytes = (uintptr_t)bc_cuda_module_end - (uintptr_t)bc_cuda_module_begin;
     for (size_t i = 0; i < bytes; i++) hash = (hash ^ bc_cuda_module_begin[i]) * UINT64_C(1099511628211);
@@ -197,9 +193,6 @@ fail:
     return 1;
 }
 
-/* Device addresses use the same typed-pointer convention as the Runtime API;
- * they are never dereferenced on the host. Kernel arguments have 64-bit pointer
- * slots, even when NULL, exactly as validated in the module manifest. */
 static CUresult gpu_alloc(void **pointer, size_t bytes) {
     CUdeviceptr address = 0;
     CUresult error = d.alloc(&address, bytes);
@@ -215,9 +208,6 @@ static CUresult gpu_copy(void *dest, const void *src, size_t bytes, int kind) {
     return kind == GPU_HTOD ? d.copy_htod((CUdeviceptr)(uintptr_t)dest, src, bytes)
         : d.copy_dtoh(dest, (CUdeviceptr)(uintptr_t)src, bytes);
 }
-/* Keep the first immediate launch/event failure until checked. Synchronizing a
- * rejected launch can succeed; treating that as success would rank stale data.
- * Actual asynchronous failures are still returned by cuCtxSynchronize. */
 static CUresult remember(CUresult error) {
     if (error && !launch_error) launch_error = error;
     return error;
@@ -236,26 +226,38 @@ static void launch(CUfunction function, unsigned blocks, unsigned threads, size_
         remember(d.launch(function, blocks, 1, 1, threads, 1, 1, (unsigned)shared, NULL, args, NULL));
 }
 static void gpu_conv(int vpt, int threads, const bc_act *source, bc_act *dest,
-        const bc_act *weights, int ci, int co, int stride, int dilation, size_t shared) {
+        const bc_act *weights, double *sums, const unsigned int *row_list,
+        const float *row_weights, int row_count, int ci, int co, int stride,
+        int dilation, size_t shared) {
     CUfunction function = NULL;
 #define X(V, T, symbol) if (vpt == V && threads == T) function = scalar_##V##_##T;
     BC_CUDA_MODULE_SCALAR(X)
 #undef X
-    if (!function) { remember(1); return; } /* CUDA_ERROR_INVALID_VALUE */
-    void *args[] = {&source, &dest, &weights, &ci, &co, &stride, &dilation};
-    unsigned blocks = (unsigned)((CUDA_NVOX + (size_t)threads * vpt - 1) / ((size_t)threads * vpt));
-    launch(function, blocks, threads, shared, args);
+    if (!function) { remember(1); return; }
+    size_t mom_shared = sums ? (size_t)(threads / 32) * 2 * CUDA_CS * sizeof(double) : 0;
+    size_t sm = shared > mom_shared ? shared : mom_shared;
+    size_t total_vox = row_list ? (size_t)row_count * CUDA_DIM : CUDA_NVOX;
+    void *args[] = {&source, &dest, &weights, &sums, &row_list, &row_weights,
+        &row_count, &ci, &co, &stride, &dilation};
+    unsigned blocks = (unsigned)((total_vox + (size_t)threads * vpt - 1) / ((size_t)threads * vpt));
+    launch(function, blocks, (unsigned)threads, sm, args);
 }
-static void gpu_wmma(int warps, const bc_act *source, bc_act *dest, const bc_act *weights, int dilation) {
+static void gpu_wmma(int warps, const bc_act *source, bc_act *dest, const bc_act *weights,
+        double *sums, const unsigned int *row_list, const float *row_weights,
+        int row_count, int dilation) {
     CUfunction function = NULL;
 #define X(W, symbol) if (warps == W) function = wmma_##W;
     BC_CUDA_MODULE_WMMA(X)
 #undef X
     if (!function) { remember(1); return; }
-    void *args[] = {&source, &dest, &weights, &dilation};
-    size_t tiles = (CUDA_NVOX + CUDA_WMMA_TILE - 1) / CUDA_WMMA_TILE;
-    launch(function, (unsigned)((tiles + warps - 1) / warps), warps * 32,
-        (size_t)27 * CUDA_CS * CUDA_CS * sizeof(bc_act) + (size_t)warps * CUDA_WMMA_SCRATCH, args);
+    size_t w_shared = (CUDA_CS == 24) ? 0 : (size_t)27 * CUDA_CS * CUDA_CS * sizeof(bc_act);
+    size_t shared = w_shared + (size_t)warps * CUDA_WMMA_SCRATCH;
+    size_t tiles = row_list ? (size_t)row_count * (CUDA_DIM / CUDA_WMMA_TILE)
+        : (CUDA_NVOX / CUDA_WMMA_TILE);
+    void *args[] = {&source, &dest, &weights, &sums, &row_list, &row_weights,
+        &row_count, &dilation};
+    launch(function, (unsigned)((tiles + (size_t)warps - 1) / (size_t)warps),
+        (unsigned)(warps * 32), shared, args);
 }
 static void gpu_probe(int *flag) { void *args[] = {&flag}; launch(wmma_probe_kernel, 1, 1, 0, args); }
 static void gpu_fill(bc_act *buffer, size_t count) {
@@ -264,27 +266,64 @@ static void gpu_fill(bc_act *buffer, size_t count) {
 static void gpu_checksum(const bc_act *buffer, unsigned long long *sum, size_t count) {
     void *args[] = {&buffer, &sum, &count}; launch(checksum_kernel, 256, 256, 0, args);
 }
-static void gpu_reduce(unsigned blocks, bc_act *buffer, double *sums, int channels) {
-    void *args[] = {&buffer, &sums, &channels}; launch(reduce_channels_kernel, blocks, CUDA_REDUCE_THREADS, 0, args);
-}
-static void gpu_moments(double *sums, float *mean, float *invstd, int channels) {
-    void *args[] = {&sums, &mean, &invstd, &channels}; launch(moments_finish_kernel, 1, CUDA_MAX_CHANNELS, 0, args);
-}
-static void gpu_norm(bc_act *buffer, const float *mean, const float *invstd,
+static void gpu_moments(const double *sums, float *mul, float *add,
         const float *scale, const float *bias, int channels) {
-    void *args[] = {&buffer, &mean, &invstd, &scale, &bias, &channels};
-    launch(norm_gelu_kernel, (unsigned)((CUDA_NVOX + CUDA_THREADS - 1) / CUDA_THREADS), CUDA_THREADS, 0, args);
+    void *args[] = {&sums, &mul, &add, &scale, &bias, &channels};
+    launch(moments_finish_kernel, 1, CUDA_MAX_CHANNELS, 0, args);
 }
-static void gpu_classify(unsigned blocks, const bc_act *input, float *labels,
-        const bc_act *weights, const bc_act *bias, int channels, int classes) {
-    void *args[] = {&input, &labels, &weights, &bias, &channels, &classes};
-    launch(classify_kernel, blocks, CUDA_THREADS, 0, args);
+static void gpu_norm(bc_act *buffer, const float *mul, const float *add,
+        const unsigned int *row_list, int row_count) {
+    size_t pairs = (size_t)row_count * CUDA_DIM * (CUDA_CS / 2);
+    unsigned blocks = (unsigned)((pairs + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&buffer, &mul, &add, &row_list, &row_count};
+    launch(norm_gelu_kernel, blocks, CUDA_THREADS, 0, args);
 }
-
-static void gpu_priors(unsigned blocks, const bc_act *input, float *planes,
-        const bc_act *weights, const bc_act *bias, int channels, int classes) {
-    void *args[] = {&input, &planes, &weights, &bias, &channels, &classes};
+static void gpu_fill_rows(bc_act *buffer, const unsigned int *pure_list, int npure, int rep_row) {
+    size_t u4s = (size_t)npure * ((CUDA_DIM * CUDA_CS * sizeof(bc_act)) / 16);
+    unsigned blocks = (unsigned)((u4s + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&buffer, &pure_list, &npure, &rep_row};
+    launch(fill_rows_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_classify_u8(const bc_act *input, unsigned char *labels,
+        const float *mul, const float *add, const bc_act *weights, const bc_act *bias,
+        const unsigned int *row_list, int row_count, int channels, int classes) {
+    size_t vox = (size_t)row_count * CUDA_DIM;
+    unsigned blocks = (unsigned)((vox + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&input, &labels, &mul, &add, &weights, &bias, &row_list, &row_count,
+        &channels, &classes};
+    launch(classify_u8_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_fill_labels_u8(unsigned char *labels, const unsigned int *pure_list,
+        int npure, int rep_row) {
+    size_t u4s = (size_t)npure * (CUDA_DIM / 16);
+    unsigned blocks = (unsigned)((u4s + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&labels, &pure_list, &npure, &rep_row};
+    launch(fill_labels_u8_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_priors(const bc_act *input, float *planes, const float *mul, const float *add,
+        const bc_act *weights, const bc_act *bias, const unsigned int *row_list,
+        int row_count, int channels, int classes) {
+    size_t vox = (size_t)row_count * CUDA_DIM;
+    unsigned blocks = (unsigned)((vox + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&input, &planes, &mul, &add, &weights, &bias, &row_list, &row_count,
+        &channels, &classes};
     launch(tissue_priors_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_fill_priors(float *planes, const unsigned int *pure_list, int npure, int rep_row) {
+    size_t vox = (size_t)npure * CUDA_DIM;
+    unsigned blocks = (unsigned)((vox + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&planes, &pure_list, &npure, &rep_row};
+    launch(fill_priors_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_pve_blur(const float *src, float *dst, int axis) {
+    unsigned blocks = (unsigned)((3 * CUDA_NVOX + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&src, &dst, &axis};
+    launch(pve_blur_kernel, blocks, CUDA_THREADS, 0, args);
+}
+static void gpu_pve_support(const float *blurred, float *planes) {
+    unsigned blocks = (unsigned)((3 * CUDA_NVOX + CUDA_THREADS - 1) / CUDA_THREADS);
+    void *args[] = {&blurred, &planes};
+    launch(pve_support_kernel, blocks, CUDA_THREADS, 0, args);
 }
 
 #include "backend_cuda_host.h"

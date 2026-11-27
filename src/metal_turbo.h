@@ -26,6 +26,7 @@
 #define BRAINCHOPC_METAL_TURBO_H
 
 #include "chan_stride.h"
+#include "pve_constants.h"
 
 #define BC_TS2(x) #x
 #define BC_TS(x) BC_TS2(x)
@@ -230,7 +231,65 @@ BC_MSL_CONV("conv0", "device const half *in [[buffer(0)]]",
 "  if(acc>bv){bv=acc;best=k;}\n"
 " }\n"
 " labels[v]=uchar(best);\n"
-"}\n";
+"}\n"
+#if BC_HAS_PVE
+/* Grouped-softmax tissue priors directly from Layer-12 turbo y8 output,
+   followed by separable 3-axis Gaussian blur and support gate in compact
+   turbo buffers (~1.2 GB vs ~4.0 GB FP16 engine). */
+"constant constexpr float PVE_TEMP=" BC_TS(BC_PRIOR_TEMPERATURE) ";\n"
+"constant constexpr float PVE_SUP_TEMP=" BC_TS(BC_PRIOR_SUPPORT_TEMPERATURE) ";\n"
+"constant constexpr float PVE_SIGMA=" BC_TS(BC_PVE_BLUR_SIGMA) ";\n"
+"constant constexpr int PVE_RADIUS=int(3.0f*PVE_SIGMA+0.5f);\n"
+"constant constexpr uint PVE_MASK[3]={" BC_TS(BC_PRIOR_GM_MASK) "," BC_TS(BC_PRIOR_WM_MASK) ","
+	BC_TS(BC_PRIOR_CSF_MASK) "};\n"
+"constant constexpr uint PVE_MIXED=" BC_TS(BC_PRIOR_MIXED_GWM_MASK) ";\n"
+"kernel void priors_turbo(device const uchar4 *y8 [[buffer(0)]], device const float4 *mom [[buffer(1)]],\n"
+"  device const float4 *stats [[buffer(2)]], constant Layer &L [[buffer(3)]],\n"
+"  device const float *w [[buffer(4)]], device float *planes [[buffer(5)]],\n"
+"  device const uint *list [[buffer(6)]], uint t [[thread_position_in_grid]]) {\n"
+" uint v=list[L.cls_off+t/256u]*256u+t%256u;\n"
+" float a[CS];\n"
+" for(uint o=0;o<CS4;o++){ float4 q=float4(y8[v*CS4+o]);\n"
+"  for(uint j=0;j<4;j++){ uint c=o*4+j; float4 st=stats[c]; a[c]=gelu(pre(v,c,q[j],mom)*st.x+st.y); } }\n"
+" float logit[NCLASS]; float mx=-3.0e38f;\n"
+" for(uint k=0;k<NCLASS;k++){\n"
+"  float acc=CBIAS?w[L.aff_off+k]:0.0f;\n"
+"  for(uint c=0;c<CHAN;c++) acc+=a[c]*w[L.next_w_off+c*NCLASS+k];\n"
+"  logit[k]=acc; mx=max(mx,acc);\n"
+" }\n"
+" float total=0.0f, sup_total=0.0f, bg=0.0f; float tissue[3]={0.0f,0.0f,0.0f};\n"
+" for(uint k=0;k<NCLASS;k++){\n"
+"  float d=logit[k]-mx;\n"
+"  float pv=exp(d/PVE_TEMP), sv=exp(d/PVE_SUP_TEMP);\n"
+"  total+=pv; sup_total+=sv; if(k==0) bg=sv;\n"
+"  for(uint p=0;p<3;p++) if(PVE_MASK[p]&(1u<<k)) tissue[p]+=pv;\n"
+"  if(PVE_MIXED&(1u<<k)){ float hv=0.5f*pv; tissue[0]+=hv; tissue[1]+=hv; }\n"
+" }\n"
+" for(uint p=0;p<3;p++) planes[p*NV+v]=tissue[p]/total;\n"
+" planes[3u*NV+v]=clamp(1.0f-bg/sup_total,0.0f,1.0f);\n"
+"}\n"
+"kernel void fill_priors(device float *planes [[buffer(5)]], constant Layer &L [[buffer(3)]],\n"
+"  device const uint *list [[buffer(6)]], uint t [[thread_position_in_grid]]) {\n"
+" uint dst=list[L.pure_off+t/256u]*256u+t%256u, src=L.rep*256u+t%256u;\n"
+" for(uint p=0;p<4;p++) planes[p*NV+dst]=planes[p*NV+src];\n"
+"}\n"
+"kernel void pve_blur_turbo(device const float *src [[buffer(0)]],\n"
+"  device float *dst [[buffer(1)]], constant uint &axis [[buffer(2)]],\n"
+"  uint2 g [[thread_position_in_grid]]) {\n"
+" uint i=g.x, p=g.y; uint stride=axis==0?1u:(axis==1?256u:65536u);\n"
+" int coord=int((i/stride)%256u); float sum=0.0f, total=0.0f;\n"
+" for(int d=-PVE_RADIUS;d<=PVE_RADIUS;d++){\n"
+"  float wt=exp(-0.5f*float(d*d)/(PVE_SIGMA*PVE_SIGMA)); total+=wt;\n"
+"  int q=coord+d; if(q>=0&&q<256) sum+=wt*src[p*NV+uint(int(i)+d*int(stride))];\n"
+" }\n"
+" dst[p*NV+i]=sum/total;\n"
+"}\n"
+"kernel void pve_support_turbo(device const float *blurred [[buffer(0)]],\n"
+"  device float *planes [[buffer(1)]], uint2 g [[thread_position_in_grid]]) {\n"
+" planes[g.y*NV+g.x]=blurred[g.y*NV+g.x]*clamp(planes[3u*NV+g.x],0.0f,1.0f);\n"
+"}\n"
+#endif
+;
 
 typedef float bc_store;
 #define BC_STORE(x) (x)
@@ -245,9 +304,10 @@ typedef struct {
 #include "turbo_cone.h"
 
 static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float *result,
-		const float *weights) {
+		const float *weights, float *tissue_planes, int *priors_prepared) {
 	enum { CS=BC_CHAN_STRIDE, NL=BC_MODEL_NHIDDEN };
 	static const int dilation[]=BC_MODEL_DILATION;
+	(void)priors_prepared;
 	NSTimeInterval start=[NSDate timeIntervalSinceReferenceDate];
 	bc_layer_offsets off[NL];
 	uint32_t cls_off,cls_bias_off;
@@ -263,8 +323,19 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	MTLCompileOptions *options=[MTLCompileOptions new];
 	id<MTLLibrary> library=[metal newLibraryWithSource:
 		[NSString stringWithUTF8String:bc_metal_turbo_source] options:options error:&error];
-	enum { K_CONV0, K_CONV, K_FINISH, K_PREP, K_NORM, K_CLASSIFY, K_FILL, K_FILL_LABELS, K_N };
-	const char *names[K_N]={"conv0","conv","finish","prep","norm","classify","fill","fill_labels"};
+	enum {
+		K_CONV0, K_CONV, K_FINISH, K_PREP, K_NORM, K_CLASSIFY, K_FILL, K_FILL_LABELS,
+#if BC_HAS_PVE
+		K_PRIORS, K_FILL_PRIORS, K_PVE_BLUR, K_PVE_SUPPORT,
+#endif
+		K_N
+	};
+	const char *names[K_N]={
+		"conv0","conv","finish","prep","norm","classify","fill","fill_labels"
+#if BC_HAS_PVE
+		,"priors_turbo","fill_priors","pve_blur_turbo","pve_support_turbo"
+#endif
+	};
 	id<MTLComputePipelineState> pipe[K_N];
 	for(int k=0;k<K_N&&library;k++) {
 		id<MTLFunction> f=[library newFunctionWithName:[NSString stringWithUTF8String:names[k]]];
@@ -292,7 +363,8 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	id<MTLBuffer> mom=[metal newBufferWithLength:BC_NVOX/BC_MT_BLK*CS*16 options:priv];
 	id<MTLBuffer> stats=[metal newBufferWithLength:CS*16 options:priv];
 	id<MTLBuffer> weff=[metal newBufferWithLength:27*CS*CS*2 options:priv];
-	id<MTLBuffer> labels=[metal newBufferWithLength:BC_NVOX options:shared];
+	NSUInteger out_bytes=tissue_planes?(NSUInteger)BC_NVOX*BC_PRIOR_PLANES*sizeof(float):(NSUInteger)BC_NVOX;
+	id<MTLBuffer> labels=[metal newBufferWithLength:out_bytes options:shared];
 	if(!in||!wbuf||!lbuf||!rwbuf||!act[0]||!act[1]||!mom||!stats||!weff||!labels) {
 		fprintf(stderr,"brainchopc: unable to allocate Metal turbo memory\n");
 		bc_tc_free(&plan);
@@ -301,9 +373,9 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 
 	id<MTLCommandQueue> queue=[metal newCommandQueue];
 	id<MTLCommandBuffer> command=[queue commandBuffer];
-	/* Rows the cone leaves unlabelled are background. */
+	/* Rows the cone leaves unlabelled are background (0 labels or 0 priors). */
 	id<MTLBlitCommandEncoder> blit=[command blitCommandEncoder];
-	[blit fillBuffer:labels range:NSMakeRange(0,BC_NVOX) value:0];
+	[blit fillBuffer:labels range:NSMakeRange(0,out_bytes) value:0];
 	[blit endEncoding];
 	id<MTLComputeCommandEncoder> e=[command computeCommandEncoder];
 	/* BRAINCHOPC_METAL_PROFILE=2: one command buffer per kernel, GPU time per kind. */
@@ -371,20 +443,60 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 			bc_turbo_layer c=*p;
 			c.next_w_off=cls_off;
 			c.aff_off=cls_bias_off;
-			stage(K_CLASSIFY);
-			[e setBuffer:dst offset:0 atIndex:0];
-			[e setBuffer:mom offset:0 atIndex:1];
-			[e setBuffer:stats offset:0 atIndex:2];
-			[e setBytes:&c length:sizeof c atIndex:3];
-			[e setBuffer:wbuf offset:0 atIndex:4];
-			[e setBuffer:labels offset:0 atIndex:5];
-			[e dispatchThreadgroups:MTLSizeMake(plan.ncls,1,1) threadsPerThreadgroup:g256];
-			if(t->npure) {
-				[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
-				stage(K_FILL_LABELS);
+#if BC_HAS_PVE
+			if(tissue_planes) {
+				/* Dead activation buffer holds 3-plane blur scratch (201 MB <= 403 MB). */
+				_Static_assert((size_t)BC_NVOX * CS >= 3ULL * BC_NVOX * sizeof(float),
+					"inactive turbo activation must hold 3 float blur planes");
+				id<MTLBuffer> blur_scratch=act[(l+1)&1];
+				stage(K_PRIORS);
+				[e setBuffer:dst offset:0 atIndex:0];
+				[e setBuffer:mom offset:0 atIndex:1];
+				[e setBuffer:stats offset:0 atIndex:2];
 				[e setBytes:&c length:sizeof c atIndex:3];
+				[e setBuffer:wbuf offset:0 atIndex:4];
 				[e setBuffer:labels offset:0 atIndex:5];
-				[e dispatchThreadgroups:MTLSizeMake(t->npure,1,1) threadsPerThreadgroup:g256];
+				[e dispatchThreadgroups:MTLSizeMake(plan.ncls,1,1) threadsPerThreadgroup:g256];
+				if(t->npure) {
+					[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+					stage(K_FILL_PRIORS);
+					[e setBytes:&c length:sizeof c atIndex:3];
+					[e setBuffer:labels offset:0 atIndex:5];
+					[e dispatchThreadgroups:MTLSizeMake(t->npure,1,1) threadsPerThreadgroup:g256];
+				}
+				if(priors_prepared) {
+					for(uint32_t axis=0;axis<3;axis++) {
+						[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+						stage(K_PVE_BLUR);
+						[e setBuffer:axis==1?blur_scratch:labels offset:0 atIndex:0];
+						[e setBuffer:axis==1?labels:blur_scratch offset:0 atIndex:1];
+						[e setBytes:&axis length:sizeof(axis) atIndex:2];
+						[e dispatchThreadgroups:MTLSizeMake(BC_NVOX/256,3,1) threadsPerThreadgroup:g256];
+					}
+					[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+					stage(K_PVE_SUPPORT);
+					[e setBuffer:blur_scratch offset:0 atIndex:0];
+					[e setBuffer:labels offset:0 atIndex:1];
+					[e dispatchThreadgroups:MTLSizeMake(BC_NVOX/256,3,1) threadsPerThreadgroup:g256];
+				}
+			} else
+#endif
+			{
+				stage(K_CLASSIFY);
+				[e setBuffer:dst offset:0 atIndex:0];
+				[e setBuffer:mom offset:0 atIndex:1];
+				[e setBuffer:stats offset:0 atIndex:2];
+				[e setBytes:&c length:sizeof c atIndex:3];
+				[e setBuffer:wbuf offset:0 atIndex:4];
+				[e setBuffer:labels offset:0 atIndex:5];
+				[e dispatchThreadgroups:MTLSizeMake(plan.ncls,1,1) threadsPerThreadgroup:g256];
+				if(t->npure) {
+					[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
+					stage(K_FILL_LABELS);
+					[e setBytes:&c length:sizeof c atIndex:3];
+					[e setBuffer:labels offset:0 atIndex:5];
+					[e dispatchThreadgroups:MTLSizeMake(t->npure,1,1) threadsPerThreadgroup:g256];
+				}
 			}
 		}
 		[e memoryBarrierWithScope:MTLBarrierScopeBuffers];
@@ -394,7 +506,7 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	[command waitUntilCompleted];
 	if(split) {
 		gpu[last]+=command.GPUEndTime-command.GPUStartTime;
-		for(int k=0;k<K_N;k++) fprintf(stderr,"brainchopc: turbo %-8s %7.1f ms\n",names[k],gpu[k]*1e3);
+		for(int k=0;k<K_N;k++) fprintf(stderr,"brainchopc: turbo %-14s %7.1f ms\n",names[k],gpu[k]*1e3);
 	}
 	if(failed||command.status==MTLCommandBufferStatusError) {
 		fprintf(stderr,"brainchopc: Metal turbo execution failed: %s\n",
@@ -406,8 +518,16 @@ static int run_turbo(id<MTLDevice> metal, const unsigned char *conformed, float 
 	size_t work=0;
 	for(int l=0;l<NL;l++) work+=plan.layer[l].count;
 	bc_tc_free(&plan);
-	const uint8_t *lab=(const uint8_t *)labels.contents;
-	for(size_t i=0;i<BC_NVOX;i++) result[i]=lab[i];
+#if BC_HAS_PVE
+	if(tissue_planes) {
+		memcpy(tissue_planes,labels.contents,(size_t)BC_NVOX*BC_PRIOR_PLANES*sizeof(float));
+		if(priors_prepared)*priors_prepared=1;
+	} else
+#endif
+	{
+		const uint8_t *lab=(const uint8_t *)labels.contents;
+		for(size_t i=0;i<BC_NVOX;i++) result[i]=lab[i];
+	}
 	if(prof)
 		fprintf(stderr,"brainchopc: Metal turbo plan+compile %.3fs, run %.3fs, read %.3fs, "
 			"%.0f%% of rows computed\n",compiled-start,finished-compiled,

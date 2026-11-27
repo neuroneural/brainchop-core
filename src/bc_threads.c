@@ -363,7 +363,7 @@ void bc_threads_set_count(long count) {
 	 * says so instead.
 	 */
 	if (pool_state != 0) {
-		fprintf(stderr, "brainchopc: warning: thread count set after the pool "
+		fprintf(stderr, "brainchop-core: warning: thread count set after the pool "
 			"was sized; keeping %d\n", pool.count);
 		return;
 	}

@@ -73,7 +73,7 @@ static void bc_stage(const char *label) {
 	if (!bc_profiling()) return;
 	double now = bc_now_ms();
 	if (bc_stage_start > 0.0 && label)
-		fprintf(stderr, "brainchopc: host %-18s %8.1f ms\n", label,
+		fprintf(stderr, "brainchop-core: host %-18s %8.1f ms\n", label,
 			now - bc_stage_start);
 	bc_stage_start = now;
 }
@@ -88,7 +88,7 @@ void *nii_malloc(size_t count, size_t size) {
 	size_t bytes;
 	if (nii_mul_size(count, size, &bytes)) return NULL;
 	void *p = malloc(bytes);
-	if (!p && bytes) fprintf(stderr, "brainchopc: out of memory\n");
+	if (!p && bytes) fprintf(stderr, "brainchop-core: out of memory\n");
 	return p;
 }
 
@@ -228,16 +228,16 @@ static int sanitize_input(nifti_image *nim, int source_datatype) {
 	if (!finite) {
 		/* Report the datatype the file actually had: the caller has already
 		   converted nim->datatype to float by this point. */
-		fprintf(stderr, "brainchopc: input has no finite voxels "
+		fprintf(stderr, "brainchop-core: input has no finite voxels "
 			"(datatype %d is unreadable, or the image is entirely NaN)\n",
 			source_datatype);
 		return 1;
 	}
 	if (replaced)
-		fprintf(stderr, "brainchopc: WARNING - replaced %zu non-finite voxels with 0\n",
+		fprintf(stderr, "brainchop-core: WARNING - replaced %zu non-finite voxels with 0\n",
 			replaced);
 	if (vmin == vmax) {
-		fprintf(stderr, "brainchopc: input image is constant (all %zu finite voxels equal %g; zero contrast)\n",
+		fprintf(stderr, "brainchop-core: input image is constant (all %zu finite voxels equal %g; zero contrast)\n",
 			finite, (double)vmin);
 		return 1;
 	}
@@ -489,7 +489,7 @@ static float *load_model_weights(void) {
 	const float *raw=model_payload(&count);
 	if(!raw)return NULL;
 	float *packed=malloc(count*sizeof(*packed));
-	if(!packed){fprintf(stderr,"brainchopc: out of memory\n");return NULL;}
+	if(!packed){fprintf(stderr,"brainchop-core: out of memory\n");return NULL;}
 #if !BC_MODEL_LOADER_TRANSPOSE
 	memcpy(packed,raw,count*sizeof(*packed));
 	return packed;
@@ -555,7 +555,7 @@ static int write_float_image(const nifti_image *reference, const float *values,
 	int failed=nifti_set_filenames(image,path,0,1)||nifti_image_write_status(image);
 	image->data=NULL;
 	nifti_image_free(image);
-	if(failed)fprintf(stderr,"brainchopc: unable to write %s\n",path);
+	if(failed)fprintf(stderr,"brainchop-core: unable to write %s\n",path);
 	return failed;
 }
 
@@ -608,7 +608,7 @@ static int write_mask(const nifti_image *reference, const float *values,
 	format_provenance_descrip(mask->descrip,backend_name,no_turbo,0);
 	int failed=nifti_set_filenames(mask,path,0,1)||nifti_image_write_status(mask);
 	nifti_image_free(mask);
-	if(failed)fprintf(stderr,"brainchopc: unable to write %s\n",path);
+	if(failed)fprintf(stderr,"brainchop-core: unable to write %s\n",path);
 	else fprintf(stderr,"brainchop :: Saved %s\n",path);
 	return failed;
 }
@@ -673,7 +673,7 @@ static int write_fraction(const nifti_image *conformed, const nifti_image *origi
 	image->scl_slope=1.0f;
 	image->scl_inter=0.0;
 	if(!save_conform&&brainchopc_reslice(image,original,1)) {
-		fprintf(stderr,"brainchopc: cannot reslice to the input grid; its "
+		fprintf(stderr,"brainchop-core: cannot reslice to the input grid; its "
 			"sform is not a usable spatial transform\n");
 		nifti_image_free(image);return 1;
 	}
@@ -699,7 +699,7 @@ static int write_fraction(const nifti_image *conformed, const nifti_image *origi
 	format_provenance_descrip(image->descrip,backend_name,no_turbo,1);
 	int failed=nifti_set_filenames(image,path,0,1)||nifti_image_write_status(image);
 	nifti_image_free(image);
-	if(failed)fprintf(stderr,"brainchopc: unable to write %s\n",path);
+	if(failed)fprintf(stderr,"brainchop-core: unable to write %s\n",path);
 	else fprintf(stderr,"brainchop :: Saved %s\n",path);
 	return failed;
 }
@@ -754,15 +754,15 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 	}
 	bc_stage("copy");
 	if(cli->ct&&brainchopc_hounsfield_to_cormack(conformed)) {
-		fprintf(stderr,"brainchopc: CT conversion failed\n");
+		fprintf(stderr,"brainchop-core: CT conversion failed\n");
 		nifti_image_free(conformed);return 1;
 	}
 	if(cli->comply&&brainchopc_comply(conformed)) {
-		fprintf(stderr,"brainchopc: compliance transform failed\n");
+		fprintf(stderr,"brainchop-core: compliance transform failed\n");
 		nifti_image_free(conformed);return 1;
 	}
 	if (brainchopc_conform(conformed)) {
-		fprintf(stderr,"brainchopc: conform failed\n");
+		fprintf(stderr,"brainchop-core: conform failed\n");
 		nifti_image_free(conformed);
 		return 1;
 	}
@@ -781,7 +781,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 		if(brainchopc_crop_box(conformed->data,(int)conformed->nx,
 				(int)conformed->ny,(int)conformed->nz,cli->crop_percent,&box)||
 				box.x_high<box.x_low) {
-			fprintf(stderr,"brainchopc: --crop found no foreground voxels\n");
+			fprintf(stderr,"brainchop-core: --crop found no foreground voxels\n");
 			nifti_image_free(conformed);return 1;
 		}
 		inference.roi_enabled=1;
@@ -802,7 +802,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 	if(!failed&&cli->pve) {
 		planes=nii_malloc((size_t)conformed->nvox*BC_PVE_PLANES,sizeof(*planes));
 		if(!planes) {
-			fprintf(stderr,"brainchopc: out of memory (--pve needs about %.1f GB "
+			fprintf(stderr,"brainchop-core: out of memory (--pve needs about %.1f GB "
 				"beyond the network)\n",
 				(double)conformed->nvox*BC_PVE_PLANES*sizeof(float)/1e9);
 			failed=1;
@@ -816,7 +816,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 	if(!failed) failed=segment_checked(effective_backend,conformed,result,weights,&inference);
 	bc_stage("segment (incl GPU)");
 	if(failed && allow_fallback && effective_backend!=&bc_cpu_backend) {
-		fprintf(stderr,"brainchopc: %s backend failed; falling back to CPU\n",effective_backend->name);
+		fprintf(stderr,"brainchop-core: %s backend failed; falling back to CPU\n",effective_backend->name);
 		effective_backend=&bc_cpu_backend;
 		class_context.backend_name=effective_backend->name;
 		failed=segment_checked(effective_backend,conformed,result,weights,&inference);
@@ -849,14 +849,14 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 						(size_t)conformed->nvox*BC_PVE_PLANES||
 					fwrite(intensity,sizeof(float),(size_t)conformed->nvox,handle)!=
 						(size_t)conformed->nvox) {
-				fprintf(stderr,"brainchopc: unable to write %s\n",dump);
+				fprintf(stderr,"brainchop-core: unable to write %s\n",dump);
 				pve_failed=1;
 			}
 			/* Checked: a 335 MB write that fails only at flush would
 			   otherwise report success and leave a truncated dump, and the
 			   gate would blame the port for a full disk. */
 			if(handle&&fclose(handle)&&!pve_failed) {
-				fprintf(stderr,"brainchopc: unable to flush %s\n",dump);
+				fprintf(stderr,"brainchop-core: unable to flush %s\n",dump);
 				pve_failed=1;
 			}
 			if(!pve_failed)fprintf(stderr,"brainchop :: Dumped priors to %s\n",dump);
@@ -892,7 +892,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 			if(fclose(handle))error=1;
 		}
 		if(error) {
-			fprintf(stderr,"brainchopc: unable to write %s\n",label_dump);
+			fprintf(stderr,"brainchop-core: unable to write %s\n",label_dump);
 			free(result);nifti_image_free(conformed);return 1;
 		}
 	}
@@ -913,7 +913,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 			brainchopc_grow_mask(result,(int)conformed->nx,(int)conformed->ny,
 				(int)conformed->nz,(float)conformed->dx,(float)conformed->dy,
 				(float)conformed->dz,(float)cli->border_mm)) {
-		fprintf(stderr,"brainchopc: unable to grow mask border\n");
+		fprintf(stderr,"brainchop-core: unable to grow mask border\n");
 		free(result);nifti_image_free(conformed);return 1;
 	}
 	bc_stage("bwlabel + border");
@@ -921,7 +921,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 	conformed->data=result; conformed->datatype=DT_FLOAT32; conformed->nbyper=4;
 	if(mindgrab_output) {
 		if(brainchopc_reslice(conformed,original,0)) {
-			fprintf(stderr,"brainchopc: cannot reslice to the input grid; its "
+			fprintf(stderr,"brainchop-core: cannot reslice to the input grid; its "
 				"sform is not a usable spatial transform\n");
 			nifti_image_free(conformed);return 1;
 		}
@@ -958,7 +958,7 @@ static int run_model_ex(nifti_image *original, int input_datatype,
 	conformed->intent_p1=conformed->intent_p2=conformed->intent_p3=0.0;
 	memset(conformed->intent_name,0,sizeof(conformed->intent_name));
 	if(!cli->save_conform&&brainchopc_reslice(conformed,original,BC_RESAMPLE_LABELS)) {
-		fprintf(stderr,"brainchopc: cannot reslice to the input grid; its "
+		fprintf(stderr,"brainchop-core: cannot reslice to the input grid; its "
 			"sform is not a usable spatial transform\n");
 		nifti_image_free(conformed);return 1;
 	}
@@ -1005,10 +1005,10 @@ int main(int argc, char **argv) {
 	if(cli.cpu_threads>0) bc_threads_set_count(cli.cpu_threads);
 #else
 	if(cli.cpu_threads>0)
-		fprintf(stderr,"brainchopc: warning: -cpu has no effect in this serial build\n");
+		fprintf(stderr,"brainchop-core: warning: -cpu has no effect in this serial build\n");
 #endif
 	if (has_suffix_ci(cli.input, ".mgz") || has_suffix_ci(cli.input, ".mgh")) {
-		fprintf(stderr, "brainchopc: unsupported format '%s' (FreeSurfer MGZ/MGH); "
+		fprintf(stderr, "brainchop-core: unsupported format '%s' (FreeSurfer MGZ/MGH); "
 			"CLI reads NIfTI-1 (.nii, .nii.gz, .nii.zst). Convert with: "
 			"mri_convert input.mgz input.nii.gz\n", cli.input);
 		return 1;
@@ -1016,7 +1016,7 @@ int main(int argc, char **argv) {
 	if (has_suffix_ci(cli.input, ".dcm") || has_suffix_ci(cli.input, ".nrrd") ||
 			has_suffix_ci(cli.input, ".nhdr") || has_suffix_ci(cli.input, ".mha") ||
 			has_suffix_ci(cli.input, ".mhd")) {
-		fprintf(stderr, "brainchopc: unsupported format '%s'; "
+		fprintf(stderr, "brainchop-core: unsupported format '%s'; "
 			"CLI reads NIfTI-1 (.nii, .nii.gz, .nii.zst) -- convert to NIfTI first\n",
 			cli.input);
 		return 1;
@@ -1026,15 +1026,15 @@ int main(int argc, char **argv) {
 	bc_stage(NULL);
 	nifti_image *nim=nifti_image_read(cli.input,1);
 	bc_stage("read + gunzip");
-	if (!nim) { fprintf(stderr,"brainchopc: unable to read %s\n",cli.input); free(weights);return 1; }
+	if (!nim) { fprintf(stderr,"brainchop-core: unable to read %s\n",cli.input); free(weights);return 1; }
 	if (nim->nx<1 || nim->ny<1 || nim->nz<1 ||
 	    nim->nvox != nim->nx*nim->ny*nim->nz) {
 		if (nim->ndim >= 4 && nim->nt > 1) {
-			fprintf(stderr, "brainchopc: input is 4D (%lldx%lldx%lldx%lld); "
+			fprintf(stderr, "brainchop-core: input is 4D (%lldx%lldx%lldx%lld); "
 				"BrainChop expects a single 3D scalar volume (extract one 3D frame first)\n",
 				(long long)nim->nx, (long long)nim->ny, (long long)nim->nz, (long long)nim->nt);
 		} else {
-			fprintf(stderr, "brainchopc: input must be a scalar 3D image "
+			fprintf(stderr, "brainchop-core: input must be a scalar 3D image "
 				"(got %lldD, dims %lldx%lldx%lld, nvox=%lld)\n",
 				(long long)nim->ndim, (long long)nim->nx, (long long)nim->ny,
 				(long long)nim->nz, (long long)nim->nvox);
@@ -1045,7 +1045,7 @@ int main(int argc, char **argv) {
 	int mindgrab_output=BC_MODEL_OUTPUT_IS_MASK;
 #if BC_HAS_PVE
 	if(cli.pve&&cli.export_classes) {
-		fprintf(stderr,"brainchopc: --pve and --export-classes ask for different "
+		fprintf(stderr,"brainchop-core: --pve and --export-classes ask for different "
 			"outputs; pick one\n");
 		free(weights);nifti_image_free(nim);return 2;
 	}
@@ -1054,7 +1054,7 @@ int main(int argc, char **argv) {
 	int explicit_gpu=backend_name&&*backend_name&&strcmp(backend_name,"auto")&&
 		strcmp(backend_name,"cpu");
 	if(special_cpu&&explicit_gpu&&!cli.cpu_requested) {
-		fprintf(stderr,"brainchopc: --crop and --export-classes "
+		fprintf(stderr,"brainchop-core: --crop and --export-classes "
 			"require the CPU backend\n");
 		free(weights);nifti_image_free(nim);return 2;
 	}
@@ -1084,7 +1084,7 @@ int main(int argc, char **argv) {
 #endif
 		) {
 		if (explicit_gpu && !cli.cpu_requested) {
-			fprintf(stderr,"brainchopc: --pve requires a backend with tissue priors (CPU, CUDA, HIP, Metal, WebGPU or WebGL2)\n");
+			fprintf(stderr,"brainchop-core: --pve requires a backend with tissue priors (CPU, CUDA, HIP, Metal, WebGPU or WebGL2)\n");
 			free(weights);nifti_image_free(nim);return 2;
 		}
 		backend=&bc_cpu_backend;
@@ -1104,15 +1104,15 @@ int main(int argc, char **argv) {
 			excluded="no CUDA module is built for this model";
 #endif
 		if(excluded)
-			fprintf(stderr,"brainchopc: backend '%s' is not built into this executable: %s\n",
+			fprintf(stderr,"brainchop-core: backend '%s' is not built into this executable: %s\n",
 				backend_name,excluded);
 		else
-			fprintf(stderr,"brainchopc: requested backend '%s' is unavailable\n",
+			fprintf(stderr,"brainchop-core: requested backend '%s' is unavailable\n",
 				backend_name?backend_name:"");
 		free(weights);nifti_image_free(nim);return 1;
 	}
 	fprintf(stderr,"brainchop :: [1/1] %s\n",cli.input);
-	fprintf(stderr,"brainchopc: v%s, using %s backend\n",BC_VERSION,backend->name);
+	fprintf(stderr,"brainchop-core: v%s, using %s backend\n",BC_VERSION,backend->name);
 	/*
 	 * --tune only means something to a backend that searches its kernel shape,
 	 * and the selected backend may not be one -- either because the user asked
@@ -1121,7 +1121,7 @@ int main(int argc, char **argv) {
 	 * the rest of this CLI is careful to avoid.
 	 */
 	if(cli.tune && !BC_TUNABLE_BACKEND(backend->name))
-		fprintf(stderr,"brainchopc: --tune has no effect on the %s backend; "
+		fprintf(stderr,"brainchop-core: --tune has no effect on the %s backend; "
 			"it does not tune its kernel shape\n",backend->name);
 	/*
 	 * Validate --adapter HERE, against the backend that was actually selected,
@@ -1158,7 +1158,7 @@ int main(int argc, char **argv) {
 	}
 	if (nifti_set_filenames(output,cli.output,0,1) ||
 	    nifti_image_write_status(output)) {
-		fprintf(stderr,"brainchopc: unable to write %s\n",cli.output);
+		fprintf(stderr,"brainchop-core: unable to write %s\n",cli.output);
 		nifti_image_free(output); return 1;
 	}
 	bc_stage("write + gzip");

@@ -511,13 +511,13 @@ export function conformVolumeData({
   if (finiteCount === 0) {
     throw new Error(
       rejectConstant
-        ? 'brainchopc: input has no finite voxels'
+        ? 'brainchop-core: input has no finite voxels'
         : 'Input volume contains no finite voxel values.'
     );
   }
   if (rejectConstant && rawMin === rawMax) {
     throw new Error(
-      `brainchopc: input image is constant (all ${finiteCount} finite voxels equal ${rawMin}; zero contrast)`
+      `brainchop-core: input image is constant (all ${finiteCount} finite voxels equal ${rawMin}; zero contrast)`
     );
   }
 

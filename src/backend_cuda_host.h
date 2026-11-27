@@ -66,13 +66,13 @@ static void stage_end(cuda_stage *stage, int index) {
 static void stage_report(void) {
 	if (!cuda_profiling()) return;
 	double total = g_stage_ms[0] + g_stage_ms[1] + g_stage_ms[2];
-	fprintf(stderr, "brainchopc: CUDA stages (%s, stripes=%d)\n",
+	fprintf(stderr, "brainchop-core: CUDA stages (%s, stripes=%d)\n",
 		g_variant_label, CUDA_MOMENT_STRIPES);
 	for (int i = 0; i < 3; i++)
-		fprintf(stderr, "brainchopc:   %-10s %8.1f ms  %5.1f%%\n",
+		fprintf(stderr, "brainchop-core:   %-10s %8.1f ms  %5.1f%%\n",
 			g_stage_name[i], g_stage_ms[i],
 			total > 0.0 ? 100.0 * g_stage_ms[i] / total : 0.0);
-	fprintf(stderr, "brainchopc:   %-10s %8.1f ms\n", "total", total);
+	fprintf(stderr, "brainchop-core:   %-10s %8.1f ms\n", "total", total);
 }
 
 typedef void (*cuda_conv_launcher)(const bc_act *, bc_act *, const bc_act *,
@@ -294,7 +294,7 @@ static int cuda_tune(bc_act *scratch_a, bc_act *scratch_b,
 		return 1;
 	}
 
-	fprintf(stderr, "brainchopc: tuning the %s CUDA convolution for this device "
+	fprintf(stderr, "brainchop-core: tuning the %s CUDA convolution for this device "
 		"(%d variants, once per device -- caching the result)\n",
 		use_wmma ? "tensor-core" : "scalar", count);
 
@@ -321,10 +321,10 @@ static int cuda_tune(bc_act *scratch_a, bc_act *scratch_b,
 		if (gpu_sync() != GPU_SUCCESS) {
 			(void)gpu_last_error();
 			if (use_wmma)
-				fprintf(stderr, "brainchopc:   warps=%-3d unavailable\n",
+				fprintf(stderr, "brainchop-core:   warps=%-3d unavailable\n",
 					table[i].first);
 			else
-				fprintf(stderr, "brainchopc:   vpt=%-2d threads=%-4d "
+				fprintf(stderr, "brainchop-core:   vpt=%-2d threads=%-4d "
 					"unavailable\n", table[i].first, table[i].second);
 			continue;
 		}
@@ -336,7 +336,7 @@ static int cuda_tune(bc_act *scratch_a, bc_act *scratch_b,
 			reference = digest;
 			have_reference = 1;
 		} else if (digest != reference) {
-			fprintf(stderr, "brainchopc:   %s=%-3d rejected (checksum "
+			fprintf(stderr, "brainchop-core:   %s=%-3d rejected (checksum "
 				"mismatch)\n", first_label, table[i].first);
 			continue;
 		}
@@ -369,10 +369,10 @@ static int cuda_tune(bc_act *scratch_a, bc_act *scratch_b,
 		}
 
 		if (use_wmma)
-			fprintf(stderr, "brainchopc:   warps=%-3d %7.2f ms\n",
+			fprintf(stderr, "brainchop-core:   warps=%-3d %7.2f ms\n",
 				table[i].first, (double)milliseconds);
 		else
-			fprintf(stderr, "brainchopc:   vpt=%-2d threads=%-4d %7.2f ms\n",
+			fprintf(stderr, "brainchop-core:   vpt=%-2d threads=%-4d %7.2f ms\n",
 				table[i].first, table[i].second, (double)milliseconds);
 		if (best < 0 || milliseconds < best_ms) {
 			best = i;
@@ -383,13 +383,13 @@ static int cuda_tune(bc_act *scratch_a, bc_act *scratch_b,
 	}
 	if (best < 0) return 1;
 	if (use_wmma)
-		fprintf(stderr, "brainchopc: chose warps=%d (%.2f ms)\n",
+		fprintf(stderr, "brainchop-core: chose warps=%d (%.2f ms)\n",
 			table[best].first, best_ms);
 	else
-		fprintf(stderr, "brainchopc: chose vpt=%d threads=%d (%.2f ms)\n",
+		fprintf(stderr, "brainchop-core: chose vpt=%d threads=%d (%.2f ms)\n",
 			table[best].first, table[best].second, best_ms);
 	if (best_slowest > 1.5f * best_ms)
-		fprintf(stderr, "brainchopc: timings varied %.2f-%.2f ms for the same "
+		fprintf(stderr, "brainchop-core: timings varied %.2f-%.2f ms for the same "
 			"shape, so this device was busy; re-run with --tune when idle\n",
 			best_ms, (double)best_slowest);
 	*chosen = best;
@@ -453,7 +453,7 @@ static void cuda_u8_to_f32_chunk(void *context, int lo, int hi) {
 
 static int cuda_finish(int failed) {
 	if (gpu_end())
-		fprintf(stderr, "brainchopc: warning: CUDA cleanup did not complete\n");
+		fprintf(stderr, "brainchop-core: warning: CUDA cleanup did not complete\n");
 	return failed ? 1 : 0;
 }
 
@@ -575,7 +575,7 @@ static int cuda_segment(const unsigned char *conformed,
 		else
 			(void)gpu_last_error();
 		if (use_wmma && !cuda_wmma_compiled()) {
-			fprintf(stderr, "brainchopc: this build has no tensor-core kernel "
+			fprintf(stderr, "brainchop-core: this build has no tensor-core kernel "
 				"for %s (compute capability %d.%d); using the scalar "
 				"convolution.\n",
 				properties.name, properties.major, properties.minor);
@@ -587,7 +587,7 @@ static int cuda_segment(const unsigned char *conformed,
 	const char *schedule_text = getenv("BRAINCHOPC_CUDA_LAYERS");
 	cuda_layer_choice schedule[BC_MODEL_NHIDDEN];
 	if (!failed && schedule_text && cuda_parse_schedule(schedule_text, spec->layers, use_wmma, schedule)) {
-		fprintf(stderr, "brainchopc: invalid or unsupported BRAINCHOPC_CUDA_LAYERS schedule\n");
+		fprintf(stderr, "brainchop-core: invalid or unsupported BRAINCHOPC_CUDA_LAYERS schedule\n");
 		failed = 1;
 	}
 	const cuda_tune_candidate *table = use_wmma
@@ -621,10 +621,10 @@ static int cuda_segment(const unsigned char *conformed,
 					table_count, use_wmma, &picked)) {
 				chosen_index = picked;
 				if (cuda_cache_store(key, &table[picked]))
-					fprintf(stderr, "brainchopc: could not save the tuning "
+					fprintf(stderr, "brainchop-core: could not save the tuning "
 						"result; it will be measured again next run\n");
 			} else {
-				fprintf(stderr, "brainchopc: tuning failed; using the "
+				fprintf(stderr, "brainchop-core: tuning failed; using the "
 					"compiled-in convolution shape\n");
 			}
 		}
@@ -694,7 +694,7 @@ static int cuda_segment(const unsigned char *conformed,
 		}
 		stage_end(&stage, 0);
 		if (cuda_profiling() && !g_timing_error)
-			fprintf(stderr, "brainchopc: CUDA layer=%d dilation=%d rows=%d conv_ms=%.6f\n",
+			fprintf(stderr, "brainchop-core: CUDA layer=%d dilation=%d rows=%d conv_ms=%.6f\n",
 				layer, spec->dilation[layer], row_count, g_stage_ms[0] - before_ms);
 		failed = cuda_error(gpu_last_error(), "convolution kernel") || g_timing_error;
 		if (failed) break;

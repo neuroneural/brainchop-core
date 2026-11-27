@@ -12,7 +12,7 @@
 #elif defined(BC_MODEL_IS_MINDSNAP)
 #define BC_MODEL_WEIGHTS_SHA8 "995cdb52"
 #elif defined(BC_MODEL_IS_MODEL16CHAN18CLS)
-#define BC_MODEL_WEIGHTS_SHA8 "22d73f43"
+#define BC_MODEL_WEIGHTS_SHA8 "f6ea86f9"
 #else
 #define BC_MODEL_WEIGHTS_SHA8 "unknown"
 #endif

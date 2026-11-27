@@ -519,7 +519,7 @@ async function runV4Inference(params: {
   } catch (err) {
     if (err instanceof BrainchopError) throw err
     const msg = err instanceof Error ? err.message : String(err)
-    record(`brainchopc: webgpu inference error: ${msg}`)
+    record(`brainchop-core: webgpu inference error: ${msg}`)
     throw new BrainchopError('inference-failed', msg, log)
   }
 }
@@ -540,14 +540,14 @@ function validateNonZeroFloat32(values: Float32Array, name: string, log: string[
   for (let i = 0; i < values.length; i++) {
     const v = values[i]
     if (!Number.isFinite(v)) {
-      const msg = `brainchopc: ${name} tissue prior contains non-finite value at voxel ${i}`
+      const msg = `brainchop-core: ${name} tissue prior contains non-finite value at voxel ${i}`
       record(msg)
       throw new BrainchopError('inference-failed', msg, log)
     }
     sum += v
   }
   if (!(sum > 0)) {
-    const msg = `brainchopc: ${name} tissue prior is empty (all zeros)`
+    const msg = `brainchop-core: ${name} tissue prior is empty (all zeros)`
     record(msg)
     throw new BrainchopError('inference-failed', msg, log)
   }
@@ -663,7 +663,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
   try {
     const rawOut = outputs[0]
     if (!rawOut || rawOut.length !== CONFORM_NVOX) {
-      const msg = `brainchopc: unexpected WebGPU output length (${rawOut?.length ?? 0})`
+      const msg = `brainchop-core: unexpected WebGPU output length (${rawOut?.length ?? 0})`
       record(msg)
       throw new BrainchopError('inference-failed', msg, log)
     }
@@ -698,7 +698,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       reportProgress('reslice', 0.93, { message: 'Applying brain mask in native space' })
 
       if (!isValidAffine4x4(orig.header.stoXyz)) {
-        const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+        const msg = 'brainchop-core: cannot reslice to the input grid; its sform is not a usable spatial transform'
         record(msg)
         throw new BrainchopError('bad-input', msg, log)
       }
@@ -763,7 +763,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       if (rawLabels[i] !== 0) foreground++
     }
     if (foreground === 0) {
-      const msg = `brainchopc: categorical foreground is 0/${CONFORM_NVOX} voxels; segmentation is empty`
+      const msg = `brainchop-core: categorical foreground is 0/${CONFORM_NVOX} voxels; segmentation is empty`
       record(msg)
       throw new BrainchopError('inference-failed', msg, log)
     }
@@ -771,7 +771,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       validateCategoricalSegmentation(rawLabels)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      record(`brainchopc: ${msg}`)
+      record(`brainchop-core: ${msg}`)
       throw new BrainchopError('inference-failed', msg, log)
     }
 
@@ -782,7 +782,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       const [guardCount] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false, sharedBwScratch)
       const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
       if (guardCount > noiseCap) {
-        const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
+        const msg = `brainchop-core: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
         record(msg)
         throw new BrainchopError('inference-failed', msg, log)
       }
@@ -792,7 +792,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       const [guardCount, guardLabels] = bw.bwlabel(rawLabels, CONFORM_SHAPE, 6, false, false, sharedBwScratch)
       const noiseCap = Math.max(100_000, Math.floor(CONFORM_NVOX * 0.01))
       if (guardCount > noiseCap) {
-        const msg = `brainchopc: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
+        const msg = `brainchop-core: categorical segmentation is excessively fragmented (${guardCount} six-connected regions, cap ${noiseCap})`
         record(msg)
         throw new BrainchopError('inference-failed', msg, log)
       }
@@ -845,7 +845,7 @@ export async function runWebGpuSegment(request: WebGpuSegmentRequest): Promise<W
       })
     } else {
       if (!isValidAffine4x4(orig.header.stoXyz)) {
-        const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+        const msg = 'brainchop-core: cannot reslice to the input grid; its sform is not a usable spatial transform'
         record(msg)
         throw new BrainchopError('bad-input', msg, log)
       }
@@ -981,7 +981,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
 
   try {
     if (outputs.length !== 3) {
-      const msg = `brainchopc: PVE expected 3 tissue priors, got ${outputs.length}`
+      const msg = `brainchop-core: PVE expected 3 tissue priors, got ${outputs.length}`
       record(msg)
       throw new BrainchopError('inference-failed', msg, log)
     }
@@ -1027,7 +1027,7 @@ export async function runWebGpuTissues(request: WebGpuSegmentRequest): Promise<W
       orig.header.dims[3],
     ]
     if (!request.saveConform && !isValidAffine4x4(orig.header.stoXyz)) {
-      const msg = 'brainchopc: cannot reslice to the input grid; its sform is not a usable spatial transform'
+      const msg = 'brainchop-core: cannot reslice to the input grid; its sform is not a usable spatial transform'
       record(msg)
       throw new BrainchopError('bad-input', msg, log)
     }

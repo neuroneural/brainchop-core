@@ -80,7 +80,7 @@ static int cuda_error(CUresult code, const char *operation) {
     if (!code) return 0;
     const char *message = NULL;
     if (d.error_string) d.error_string(code, &message);
-    fprintf(stderr, "brainchopc: CUDA Driver API %s failed: %d (%s)\n",
+    fprintf(stderr, "brainchop-core: CUDA Driver API %s failed: %d (%s)\n",
         operation, code, message ? message : "unknown error");
     return 1;
 }
@@ -152,7 +152,7 @@ static int env_enabled(const char *name) {
 }
 static int gpu_begin(int ordinal) {
     if (driver_load()) {
-        fprintf(stderr, "brainchopc: CUDA modules require an NVIDIA driver with API >= %d\n",
+        fprintf(stderr, "brainchop-core: CUDA modules require an NVIDIA driver with API >= %d\n",
             BC_CUDA_MODULE_DRIVER_API);
         return 1;
     }
@@ -162,7 +162,7 @@ static int gpu_begin(int ordinal) {
     if (cuda_error(d.device_get(&device, selected), "selecting device") ||
         cuda_error(gpu_properties_get(&props, selected), "reading device properties")) return 1;
     if (props.major < 6) {
-        fprintf(stderr, "brainchopc: CUDA module requires sm60 or newer; found %s sm%d%d\n",
+        fprintf(stderr, "brainchop-core: CUDA module requires sm60 or newer; found %s sm%d%d\n",
             props.name, props.major, props.minor);
         return 1;
     }
@@ -185,7 +185,7 @@ static int gpu_begin(int ordinal) {
         BC_CUDA_MODULE_ABI, (unsigned long long)hash,
         env_enabled("CUDA_FORCE_PTX_JIT"), env_enabled("CUDA_DISABLE_PTX_JIT"),
         env_enabled("CUDA_FORCE_JIT"), env_enabled("CUDA_DISABLE_JIT"));
-    fprintf(stderr, "brainchopc: CUDA Driver API, %s sm%d%d, module ABI %d\n",
+    fprintf(stderr, "brainchop-core: CUDA Driver API, %s sm%d%d, module ABI %d\n",
         props.name, props.major, props.minor, BC_CUDA_MODULE_ABI);
     return 0;
 fail:

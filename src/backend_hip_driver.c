@@ -222,7 +222,7 @@ static int hip_available(void) {
 
 static int hip_error(hipError_t error, const char *operation) {
 	if (error == BC_HIP_SUCCESS) return 0;
-	fprintf(stderr, "brainchopc: HIP %s failed: %s: %s (%d)\n", operation,
+	fprintf(stderr, "brainchop-core: HIP %s failed: %s: %s (%d)\n", operation,
 		d.error_name ? d.error_name(error) : "error",
 		d.error_string ? d.error_string(error) : "unknown", error);
 	return 1;
@@ -241,7 +241,7 @@ static int allocate_buffers(HIPdeviceptr buffers[3], const uint64_t sizes[3]) {
             char operation[64];
             snprintf(operation, sizeof(operation), "allocating %s", names[i]);
             (void)hip_error(status, operation);
-            fprintf(stderr, "brainchopc: HIP memory: %s request=%llu bytes (%.3f GiB); "
+            fprintf(stderr, "brainchop-core: HIP memory: %s request=%llu bytes (%.3f GiB); "
                 "planned persistent=%llu bytes (%.3f GiB); already allocated=%llu bytes; ",
                 names[i], (unsigned long long)sizes[i], (double)sizes[i] / 1073741824.0,
                 (unsigned long long)planned, (double)planned / 1073741824.0,
@@ -412,11 +412,11 @@ static int hip_segment(const unsigned char *conformed, float *result,
 	int requested = options ? options->adapter : -1;
 	int ordinal = compatible_device(requested, &device, &properties);
 	if (ordinal < 0) {
-		fprintf(stderr, "brainchopc: no selected HIP adapter matches %s\n",
+		fprintf(stderr, "brainchop-core: no selected HIP adapter matches %s\n",
 			profile->architecture);
 		return 1;
 	}
-	fprintf(stderr, "brainchopc: HIP, %s %s, %zu offline kernels\n",
+	fprintf(stderr, "brainchop-core: HIP, %s %s, %zu offline kernels\n",
 		properties.name, profile->architecture, profile->kernel_count);
 
 	HIPcontext context = NULL;
@@ -434,7 +434,7 @@ static int hip_segment(const unsigned char *conformed, float *result,
 		pve ? profile->pve_output_bytes : voxels};
 	if (!failed) failed = allocate_buffers(buffers, sizes);
 	if (!failed && getenv("BC_HIP_MEMORY"))
-		fprintf(stderr, "brainchopc: HIP allocations: arena=%llu input=%llu output=%llu "
+		fprintf(stderr, "brainchop-core: HIP allocations: arena=%llu input=%llu output=%llu "
 			"high_water=%llu bytes (3 live hipMalloc allocations; driver/private excluded) "
 			"model=%s mode=%s\n",
 			(unsigned long long)sizes[0], (unsigned long long)sizes[1],
@@ -465,7 +465,7 @@ static int hip_segment(const unsigned char *conformed, float *result,
 			bc_hip_kernels_begin + kernel->offset, 2, options_array, option_values);
 		if (status != BC_HIP_SUCCESS) {
 			(void)hip_error(status, "loading code object");
-			if (log[0]) fprintf(stderr, "brainchopc: HIP load log: %s\n", log);
+			if (log[0]) fprintf(stderr, "brainchop-core: HIP load log: %s\n", log);
 			failed = 1;
 		} else failed = hip_error(d.function_get(&functions[index], modules[index],
 			kernel->entry), "resolving kernel");
@@ -509,7 +509,7 @@ static int hip_segment(const unsigned char *conformed, float *result,
 	if (!failed) failed = hip_error(d.synchronize(NULL), "synchronizing kernels");
 	if (time_gpu && !failed) {
 		clock_gettime(CLOCK_MONOTONIC, &end);
-		fprintf(stderr, "brainchopc: HIP %zu dispatches in %.3f s\n",
+		fprintf(stderr, "brainchop-core: HIP %zu dispatches in %.3f s\n",
 			launched, (double)(end.tv_sec - start.tv_sec) +
 			1e-9 * (double)(end.tv_nsec - start.tv_nsec));
 	}

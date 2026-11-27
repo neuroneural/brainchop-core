@@ -499,7 +499,7 @@ static inline int face_neighbors_fast(uint32_t p, size_t nx, size_t ny,
 int bwlabel_validate(const float *img, const size_t dim[3], unsigned classes) {
 	if (!img || !dim || !classes || !dim[0] || !dim[1] || !dim[2] ||
 			dim[0] > SIZE_MAX / dim[1] || dim[0] * dim[1] > SIZE_MAX / dim[2]) {
-		fprintf(stderr, "brainchopc: invalid categorical volume dimensions\n");
+		fprintf(stderr, "brainchop-core: invalid categorical volume dimensions\n");
 		return 1;
 	}
 	const size_t nx = dim[0], ny = dim[1], nz = dim[2];
@@ -517,7 +517,7 @@ int bwlabel_validate(const float *img, const size_t dim[3], unsigned classes) {
 	for (int ch = 0; ch < vc.nchunks; ch++) {
 		if (vc.has_bad[ch]) {
 			size_t i = vc.bad_idx[ch];
-			fprintf(stderr, "brainchopc: invalid categorical label at voxel %zu: %g\n",
+			fprintf(stderr, "brainchop-core: invalid categorical label at voxel %zu: %g\n",
 				i, (double)img[i]);
 			return 1;
 		}
@@ -525,7 +525,7 @@ int bwlabel_validate(const float *img, const size_t dim[3], unsigned classes) {
 		roots += vc.roots[ch];
 	}
 	if (!foreground || (double)foreground > (double)n * 0.95) {
-		fprintf(stderr, "brainchopc: categorical foreground is %zu/%zu voxels; %s\n",
+		fprintf(stderr, "brainchop-core: categorical foreground is %zu/%zu voxels; %s\n",
 			foreground, n, foreground ? "segmentation is near-filled" : "segmentation is empty");
 		return 1;
 	}
@@ -538,7 +538,7 @@ int bwlabel_validate(const float *img, const size_t dim[3], unsigned classes) {
 	uint32_t *queue = malloc(foreground * sizeof(*queue));
 	if (!visited || !queue) {
 		free(visited); free(queue);
-		fprintf(stderr, "brainchopc: unable to allocate categorical quality workspace\n");
+		fprintf(stderr, "brainchop-core: unable to allocate categorical quality workspace\n");
 		return 1;
 	}
 	const int is256 = (nx == 256 && ny == 256);
@@ -561,7 +561,7 @@ int bwlabel_validate(const float *img, const size_t dim[3], unsigned classes) {
 	}
 	free(visited); free(queue);
 	if (components > cap)
-		fprintf(stderr, "brainchopc: categorical segmentation is excessively fragmented "
+		fprintf(stderr, "brainchop-core: categorical segmentation is excessively fragmented "
 			"(more than %zu six-connected regions)\n", cap);
 	return components > cap;
 }

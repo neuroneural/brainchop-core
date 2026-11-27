@@ -42,7 +42,7 @@ import { setupNet, releaseV4Workspace, type V4ExecuteFn } from './meshnet_fast_v
 
 /** Set by esbuild from js/package.json; falls back when run unbundled in tests. */
 declare const __BC_VERSION__: string | undefined
-const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.1.2'
+const BC_VERSION = typeof __BC_VERSION__ === 'string' ? __BC_VERSION__ : '1.1.3'
 
 const CONFORM_DIM = 256
 const CONFORM_SHAPE: [number, number, number] = [CONFORM_DIM, CONFORM_DIM, CONFORM_DIM]

@@ -1,6 +1,6 @@
 {
   "name": "@brainchop/core",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Browser MeshNet brain segmentation (MindGrab skull stripping, 18- and 104-class parcellation, GM/WM/CSF fractions) on pure-JS WebGPU V4, with WebGL2 and threaded-CPU WASM fallbacks",
   "type": "module",
   "main": "dist/index.js",

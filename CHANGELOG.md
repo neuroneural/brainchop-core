@@ -2,6 +2,14 @@
 
 All notable changes to BrainChop Core are documented in this file.
 
+## [1.1.3] - 2026-11-27
+
+Restores bundler-visible static module worker instantiation in `@brainchop/core` so Vite, Rollup, and Webpack 5 emit the persistent segmentation worker chunk reliably.
+
+### Browser Package (`@brainchop/core`)
+- **Static Worker URL Fix:** Restored the direct `new Worker(new URL(__BC_WORKER__, import.meta.url), { type: 'module' })` expression in `js/src/index.ts` while retaining the persistent singleton worker and pooled GPU workspace introduced in `1.1.1`.
+- **Bundler Regression Guards:** Added a build-time check in `js/esbuild.config.mjs` (covering `dist/index.js` and all per-model entry points) and a unit assertion in `js/test/webgpu_v4_unit.test.mjs` verifying that every published entry preserves the literal `new Worker(new URL("./worker*.js", import.meta.url), { type: "module" })` call.
+
 ## [1.1.2] - 2026-11-27
 
 Upgrades the embedded `mindmap-fast` model (`model16chan18cls`) to clinical-grade MindMap-16 v4.1 weights with the same 84K-parameter architecture and memory footprint, refreshes validation documentation, and standardizes runtime diagnostic log prefixes to `brainchop-core:`.

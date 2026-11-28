@@ -625,7 +625,8 @@ static void mt_prepare_sme(const float *kernel, int8_t *packed) {
 	}
 
 #if defined(__aarch64__)
-/* Float block sums (64 voxels) promoted to double once per block. */
+_Static_assert(MN_CS % 8 == 0, "NEON epilogue pairs 4-channel groups");
+/* NEON block moments (double sums, 8 channels per pass over L1 block) + y8 pack. */
 static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float rw,
 		uint8_t *restrict y8, float *restrict ymom,
 		double *sum, double *square, float *low, float *high) {
@@ -637,39 +638,62 @@ static void mt_row_epilogue(const float *restrict row_buf, uint32_t row, float r
 		uint8_t *blk_out = dst_row + (size_t)b * MT_YBLK * MN_CS;
 		float *bmin = mom_row + (size_t)b * 2 * MN_CS;
 		float *bscale = bmin + MN_CS;
-		float32x4_t s[G], q[G], mn[G], mx[G];
-		for (int g = 0; g < G; g++) {
-			s[g] = q[g] = vdupq_n_f32(0.0f);
-			mn[g] = vdupq_n_f32(FLT_MAX);
-			mx[g] = vdupq_n_f32(-FLT_MAX);
-		}
-		for (int v = 0; v < MT_YBLK; v++)
-			for (int g = 0; g < G; g++) {
-				float32x4_t x = vld1q_f32(blk_in + v * MN_CS + 4 * g);
-				s[g] = vaddq_f32(s[g], x);
-				q[g] = vfmaq_f32(q[g], x, x);
-				mn[g] = vminnmq_f32(mn[g], x);
-				mx[g] = vmaxnmq_f32(mx[g], x);
+		float32x4_t mn[G], inv4[G];
+		for (int g0 = 0; g0 < G; g0 += 2) {
+			float64x2_t s0l = vdupq_n_f64(0.0), s0h = vdupq_n_f64(0.0);
+			float64x2_t q0l = vdupq_n_f64(0.0), q0h = vdupq_n_f64(0.0);
+			float64x2_t s1l = vdupq_n_f64(0.0), s1h = vdupq_n_f64(0.0);
+			float64x2_t q1l = vdupq_n_f64(0.0), q1h = vdupq_n_f64(0.0);
+			float32x4_t mn0 = vdupq_n_f32(FLT_MAX), mx0 = vdupq_n_f32(-FLT_MAX);
+			float32x4_t mn1 = vdupq_n_f32(FLT_MAX), mx1 = vdupq_n_f32(-FLT_MAX);
+			for (int v = 0; v < MT_YBLK; v++) {
+				const float *p = blk_in + v * MN_CS + 4 * g0;
+				float32x4_t x0 = vld1q_f32(p);
+				float32x4_t x1 = vld1q_f32(p + 4);
+				mn0 = vminnmq_f32(mn0, x0);
+				mx0 = vmaxnmq_f32(mx0, x0);
+				mn1 = vminnmq_f32(mn1, x1);
+				mx1 = vmaxnmq_f32(mx1, x1);
+				float64x2_t d0l = vcvt_f64_f32(vget_low_f32(x0));
+				float64x2_t d0h = vcvt_high_f64_f32(x0);
+				float64x2_t d1l = vcvt_f64_f32(vget_low_f32(x1));
+				float64x2_t d1h = vcvt_high_f64_f32(x1);
+				s0l = vaddq_f64(s0l, d0l);
+				q0l = vfmaq_f64(q0l, d0l, d0l);
+				s0h = vaddq_f64(s0h, d0h);
+				q0h = vfmaq_f64(q0h, d0h, d0h);
+				s1l = vaddq_f64(s1l, d1l);
+				q1l = vfmaq_f64(q1l, d1l, d1l);
+				s1h = vaddq_f64(s1h, d1h);
+				q1h = vfmaq_f64(q1h, d1h, d1h);
 			}
-		float32x4_t inv4[G];
-		for (int g = 0; g < G; g++) {
-			vst1q_f32(bmin + 4 * g, mn[g]);
-			float32x4_t span = vsubq_f32(mx[g], mn[g]);
-			uint32x4_t live = vcgtq_f32(span, vdupq_n_f32(1e-30f));
-			vst1q_f32(bscale + 4 * g, vreinterpretq_f32_u32(vandq_u32(live,
-				vreinterpretq_u32_f32(vmulq_n_f32(span, 1.0f / 255.0f)))));
-			inv4[g] = vreinterpretq_f32_u32(vandq_u32(live,
-				vreinterpretq_u32_f32(vdivq_f32(vdupq_n_f32(255.0f), span))));
-			float bs[4], bq[4], bl[4], bh[4];
-			vst1q_f32(bs, s[g]); vst1q_f32(bq, q[g]); vst1q_f32(bl, mn[g]); vst1q_f32(bh, mx[g]);
-			for (int k = 0; k < 4; k++) {
-				int c = 4 * g + k;
-				if (rw > 0.0f) {
-					sum[c] += (double)rw * bs[k];
-					square[c] += (double)rw * bq[k];
+			float32x4_t mnv[2] = { mn0, mn1 }, mxv[2] = { mx0, mx1 };
+			double bs[8], bq[8];
+			vst1q_f64(bs + 0, s0l); vst1q_f64(bs + 2, s0h);
+			vst1q_f64(bs + 4, s1l); vst1q_f64(bs + 6, s1h);
+			vst1q_f64(bq + 0, q0l); vst1q_f64(bq + 2, q0h);
+			vst1q_f64(bq + 4, q1l); vst1q_f64(bq + 6, q1h);
+			for (int gg = 0; gg < 2; gg++) {
+				int g = g0 + gg;
+				mn[g] = mnv[gg];
+				vst1q_f32(bmin + 4 * g, mnv[gg]);
+				float32x4_t span = vsubq_f32(mxv[gg], mnv[gg]);
+				uint32x4_t live = vcgtq_f32(span, vdupq_n_f32(1e-30f));
+				vst1q_f32(bscale + 4 * g, vreinterpretq_f32_u32(vandq_u32(live,
+					vreinterpretq_u32_f32(vmulq_n_f32(span, 1.0f / 255.0f)))));
+				inv4[g] = vreinterpretq_f32_u32(vandq_u32(live,
+					vreinterpretq_u32_f32(vdivq_f32(vdupq_n_f32(255.0f), span))));
+				float bl[4], bh[4];
+				vst1q_f32(bl, mnv[gg]); vst1q_f32(bh, mxv[gg]);
+				for (int k = 0; k < 4; k++) {
+					int c = 4 * g + k;
+					if (rw > 0.0f) {
+						sum[c] += (double)rw * bs[4 * gg + k];
+						square[c] += (double)rw * bq[4 * gg + k];
+					}
+					if (bl[k] < low[c]) low[c] = bl[k];
+					if (bh[k] > high[c]) high[c] = bh[k];
 				}
-				if (bl[k] < low[c]) low[c] = bl[k];
-				if (bh[k] > high[c]) high[c] = bh[k];
 			}
 		}
 		const float32x4_t half = vdupq_n_f32(0.5f);

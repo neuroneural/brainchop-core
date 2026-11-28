@@ -105,18 +105,52 @@ int main(void) {
 	}
 	for (size_t i = 0; i < slice * MN_CS; i++)
 		got[i] = ((int)(i % 12001) - 6000) * 0.001f;
-	/* Verify y8 64-voxel epilogue + mt_quant_y8_bins round-trip on slice 0. */
+	/* Verify y8 64-voxel epilogue + moments + mt_quant_y8_bins round-trip on slice 0. */
 	double s_sum[MN_CS] = { 0 }, s_sq[MN_CS] = { 0 };
-	float s_lo[MN_CS], s_hi[MN_CS];
-	for (int c = 0; c < MN_CS; c++) { s_lo[c] = FLT_MAX; s_hi[c] = -FLT_MAX; }
+	double r_sum[MN_CS] = { 0 }, r_sq[MN_CS] = { 0 };
+	float s_lo[MN_CS], s_hi[MN_CS], r_lo[MN_CS], r_hi[MN_CS];
+	for (int c = 0; c < MN_CS; c++) {
+		s_lo[c] = r_lo[c] = FLT_MAX;
+		s_hi[c] = r_hi[c] = -FLT_MAX;
+	}
 	for (uint32_t y = 0; y < MN_DIM; y++) {
 		row_list[y] = y;
 		row_wt[y] = 1.0f;
-		mt_row_epilogue(got + (size_t)y * MN_DIM * MN_CS, y, 1.0f, y8, ymom, s_sum, s_sq, s_lo, s_hi);
+		const float *row_in = got + (size_t)y * MN_DIM * MN_CS;
+		mt_row_epilogue(row_in, y, 1.0f, y8, ymom, s_sum, s_sq, s_lo, s_hi);
+		for (int x = 0; x < MN_DIM; x++)
+			for (int c = 0; c < MN_CS; c++) {
+				float val = row_in[x * MN_CS + c];
+				r_sum[c] += val;
+				r_sq[c] += (double)val * val;
+				if (val < r_lo[c]) r_lo[c] = val;
+				if (val > r_hi[c]) r_hi[c] = val;
+			}
 	}
 	mt_quant_y8_slab quant = { y8, ymom, codes, mul, add, inv_qs, row_list, 0, MN_DIM };
 	mt_quant_y8_bins(&quant, 0, MT_STAT_BINS - 1);
 	int quant_bad = 0, sme_bad = 0;
+	for (int c = 0; c < MN_CS; c++) {
+		quant_bad += fabs(s_sum[c] - r_sum[c]) > 1e-11 * fmax(1.0, fabs(r_sum[c]));
+		quant_bad += fabs(s_sq[c] - r_sq[c]) > 1e-11 * fmax(1.0, fabs(r_sq[c]));
+		quant_bad += s_lo[c] != r_lo[c] || s_hi[c] != r_hi[c];
+	}
+	/* Constant high-DC row must stay double-exact (float32 sums yield ~9e-5 apparent variance). */
+	{
+		float dc_row[MN_DIM * MN_CS];
+		uint8_t dc_y8[MN_DIM * MN_CS];
+		float dc_mom[MT_YBLKS_PER_ROW * 2 * MN_CS];
+		double dc_sum[MN_CS] = { 0 }, dc_sq[MN_CS] = { 0 };
+		float dc_lo[MN_CS], dc_hi[MN_CS];
+		for (int c = 0; c < MN_CS; c++) { dc_lo[c] = FLT_MAX; dc_hi[c] = -FLT_MAX; }
+		for (int i = 0; i < MN_DIM * MN_CS; i++) dc_row[i] = 10.3f;
+		mt_row_epilogue(dc_row, 0, 1.0f, dc_y8, dc_mom, dc_sum, dc_sq, dc_lo, dc_hi);
+		for (int c = 0; c < MN_CS; c++) {
+			double mean = dc_sum[c] / MN_DIM;
+			double var = dc_sq[c] / MN_DIM - mean * mean;
+			quant_bad += fabs(var) > 1e-11;
+		}
+	}
 	for (size_t v = 0; v < slice; v++) {
 		size_t blk = v / MT_YBLK;
 		const float *bmin = ymom + blk * 2 * MN_CS;

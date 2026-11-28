@@ -5,7 +5,7 @@ All notable changes to BrainChop Core are documented in this file.
 ## [Unreleased]
 
 ### Performance & Memory Upgrades
-- **ARM CPU Turbo (Apple SME & NEON):** SME hidden convolutions run whole rows with predicated edge taps instead of partially filled edge blocks, and the turbo row epilogue is NEON (float 64-voxel block sums). Apple M4 Pro end-to-end: **1.27×** `mindmap`, **1.57×** `mindmap-fast`, **1.29×** `mindsnap`, **1.18×** int8 NEON. Turbo labels shift slightly (Dice vs `--no-turbo` unchanged at ~0.998); `--no-turbo` stays bit-exact.
+- **ARM CPU Turbo (Apple SME & NEON):** SME hidden convolutions run whole rows with predicated edge taps instead of partially filled edge blocks, and the turbo row epilogue is vectorized in NEON with `double` (`float64x2_t`) 64-voxel block moments. Apple M4 Pro end-to-end: **1.27×** `mindmap`, **1.57×** `mindmap-fast`, **1.29×** `mindsnap`, **1.18×** int8 NEON (and **1.20–1.26×** int8 SDOT on Apple M1). Preserves bit-exact turbo and `--no-turbo` outputs.
 
 ## [1.1.3] - 2026-11-27
 

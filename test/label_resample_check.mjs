@@ -65,13 +65,34 @@ function check(name, a, b, dims = [9,7,5], targetDims = [7,6,4], invalid = false
   cases++
 }
 try {
-  // 1 mm (L <= 1.5001): single center probe with floor(x + 0.5)
+  // 1 mm / thin-slice (L <= 1.5001): streaming 2x2x2 fixed-point trilinear one-hot voting
+  // with deterministic NN tie-break.
   const halfShift = identity(); halfShift[0][3] = 0.5
-  check('1mm half-voxel shift rounds toward +inf via floor(x+0.5)', identity(), halfShift, [2,1,1], [1,1,1], false, [7,2], [2])
+  check('1mm half-voxel shift ties break to NN via floor(x+0.5)', identity(), halfShift, [2,1,1], [1,1,1], false, [7,2], [2])
   const edge = identity(); edge[0][3] = -0.5
   check('1mm negative half rounds to 0 (in-bounds)', identity(), edge, [1,1,1], [1,1,1], false, [7], [7])
   const negativeHalf = identity(); negativeHalf[0][3] = -0.25
   check('negative quarter rounds to 0', identity(), negativeHalf, [1,1,1], [1,1,1], false, [7], [7])
+
+  // 2D/3D trilinear voting beats an isolated corner even when it sits at the NN position:
+  // At (0.6, 0.6, 0.6), NN corner (1,1,1)=9 has weight 0.6^3 = 0.216, while the 7 other
+  // corners all hold label 3 with combined weight 1 - 0.216 = 0.784 -> 3 MUST win!
+  const triPt = identity(); triPt[0][3] = 0.6; triPt[1][3] = 0.6; triPt[2][3] = 0.6
+  check('3D trilinear beats isolated NN corner (0.784 vs 0.216)', identity(), triPt, [2,2,2], [1,1,1], false, [3,3,3,3,3,3,3,9], [3])
+  // Multi-class junction (4 labels meeting at (0.6, 0.6, 0.4)):
+  // z=0 slice (w=0.6): [1,2; 2,4], z=1 slice (w=0.4): [1,2; 2,4]
+  // Label 2 appears twice at (1,0,*) and (0,1,*): weight 0.6*0.4 + 0.4*0.6 = 0.48 > label 4 (0.36) > label 1 (0.16)
+  const triJunction = identity(); triJunction[0][3] = 0.6; triJunction[1][3] = 0.6; triJunction[2][3] = 0.4
+  check('3D trilinear multi-class junction sums disjoint corners of same label', identity(), triJunction, [2,2,2], [1,1,1], false, [1,2,2,4, 1,2,2,4], [2])
+  // Exact 3D midpoint (0.5, 0.5, 0.5) tie-break: 4 corners=5 vs 4 corners=8, NN=(1,1,1)=8 -> 8 wins
+  const triMid = identity(); triMid[0][3] = 0.5; triMid[1][3] = 0.5; triMid[2][3] = 0.5
+  check('3D midpoint 4-vs-4 tie breaks to NN corner (1,1,1)', identity(), triMid, [2,2,2], [1,1,1], false, [5,5,5,5, 8,8,8,8], [8])
+  // Empty all-zero source (bbox early-out path)
+  check('empty all-zero source', identity(), triPt, [4,4,4], [3,3,3], false, new Array(64).fill(0), new Array(27).fill(0))
+  // Border-touching single voxel at corner (0,0,0) and (2,2,2) exercises OOB sampling inside bbox
+  const borderVals = new Array(27).fill(0); borderVals[0] = 6; borderVals[26] = 11
+  const borderShift = identity(); borderShift[0][3] = -0.2; borderShift[1][3] = -0.2; borderShift[2][3] = -0.2
+  check('border-touching corners with negative shift', identity(), borderShift, [3,3,3], [3,3,3], false, borderVals)
 
   // 2 mm even-factor grid (L = 2.0 -> n = 4 at +/-{1/8, 3/8}): {C-1, C, C, C+1} at integer C
   const thick2 = identity(); thick2[0][0] = 2; thick2[0][3] = 1
@@ -120,6 +141,30 @@ try {
       a[i][(i+1)%3]=Math.fround(random()*0.7); b[i][(i+2)%3]=Math.fround(random()*0.7)
     }
     check(`oblique/anisotropic/flip ${n}`, a.map(r=>r.map(Math.fround)), b.map(r=>r.map(Math.fround)))
+  }
+  // 60 dedicated thin/isotropic oblique 3D rotation cases (all axes L <= 1.5) to
+  // hammer the streaming 2x2x2 fixed-point trilinear C <-> JS parity path.
+  for (let n=0;n<60;n++) {
+    const ux = random()*2-1, uy = random()*2-1, uz = random()*2-1
+    const un = Math.hypot(ux, uy, uz) || 1
+    const x = ux/un, y = uy/un, z = uz/un
+    const th = (2 + random()*28) * Math.PI / 180
+    const c = Math.cos(th), s = Math.sin(th), omc = 1 - c
+    const R = [
+      [c + x*x*omc,     x*y*omc - z*s, x*z*omc + y*s],
+      [y*x*omc + z*s,   c + y*y*omc,   y*z*omc - x*s],
+      [z*x*omc - y*s,   z*y*omc + x*s, c + z*z*omc],
+    ]
+    const sx = (random()<0.5?-1:1)*(0.6 + random()*0.75)
+    const sy = (random()<0.5?-1:1)*(0.6 + random()*0.75)
+    const sz = (random()<0.5?-1:1)*(0.6 + random()*0.75)
+    const b = [
+      [Math.fround(R[0][0]*sx), Math.fround(R[0][1]*sy), Math.fround(R[0][2]*sz), Math.fround(random()*3-1.5)],
+      [Math.fround(R[1][0]*sx), Math.fround(R[1][1]*sy), Math.fround(R[1][2]*sz), Math.fround(random()*3-1.5)],
+      [Math.fround(R[2][0]*sx), Math.fround(R[2][1]*sy), Math.fround(R[2][2]*sz), Math.fround(random()*3-1.5)],
+      [0, 0, 0, 1],
+    ]
+    check(`oblique thin/iso trilinear ${n}`, identity(), b, [11,10,9], [9,8,7])
   }
   check('axis permutation', identity(), [[0,0,1,0],[1,0,0,0],[0,1,0,0],[0,0,0,1]])
   const singular=identity(); singular[1]=[0,0,0,0]

@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -223,12 +224,16 @@ typedef struct {
 	size_t out_xy;
 	int linear;
 	int label_probes;
+	int bbox[6]; /* [minX, maxX, minY, maxY, minZ, maxZ] of nonzero source voxels */
 	double label_origin[3], label_step[3][3], label_delta[BC_LABEL_MAX_PROBES][3];
 } reslice_slab;
 
 /* Adaptive center-outward midpoint offsets per destination axis, matching
-   brainchop-test's reslice-volume.js bit-for-bit.
-   - L <= 1.5001: 1 probe at {0.0} (fast nearest path, zero blur on 1-1.5 mm).
+   js/src/webgpu/reslice-volume.js bit-for-bit.
+   - L <= 1.5001: 1 probe at {0.0} (routes to streaming 2x2x2 fixed-point
+     trilinear one-hot label voting in label_reslice_rows, eliminating oblique
+     and sub-mm Moire aliasing with zero extra volume memory while remaining
+     bit-exact on cardinal integer-aligned 1 mm grids).
    - L <= 3.5001: 4 midpoint probes at +/-{1/8, 3/8} (covers 2-3 mm with double
      weight on center at integer centers and zero half-integer hits at BOTH
      integer and half-integer centers, fixing both the 2 mm +/-0.25 bias and
@@ -253,33 +258,154 @@ static int label_axis_offsets(const double step[3], double offs[8]) {
 	return n;
 }
 
-/* Browser categorical export: adaptive center-outward midpoint majority vote.
-   Count background too; equal tallies retain the FIRST sample label (closest
-   to the destination voxel center).
-   Use double coordinates like JS, and floor(x+0.5) rather than roundf: JS
-   rounds negative half coordinates towards +infinity. Check before casting. */
+static inline float label_sample_f(const float *in, int x, int y, int z,
+                                   int nx, int ny, int nz, int nxy) {
+	if (x >= 0 && x < nx && y >= 0 && y < ny && z >= 0 && z < nz)
+		return in[(size_t)x + (size_t)y * (size_t)nx + (size_t)z * (size_t)nxy];
+	return 0.0f;
+}
+
+/* Clip inner loop range [lo_i, hi_i] against [lo_b, hi_b] for b(i) = b0 + i * e. */
+static inline int clip_row_axis(double b0, double e, double lo_b, double hi_b,
+                                int *lo_i, int *hi_i) {
+	if (fabs(e) < 1e-12) {
+		if (b0 < lo_b || b0 > hi_b) { *lo_i = 1; *hi_i = 0; return 0; }
+		return 1;
+	}
+	double t0 = (lo_b - b0) / e;
+	double t1 = (hi_b - b0) / e;
+	if (t0 > t1) { double tmp = t0; t0 = t1; t1 = tmp; }
+	double a = ceil(t0), b = floor(t1);
+	if (a > (double)*lo_i) *lo_i = (a > (double)(*hi_i + 1)) ? (*hi_i + 1) : (int)a;
+	if (b < (double)*hi_i) *hi_i = (b < (double)(*lo_i - 1)) ? (*lo_i - 1) : (int)b;
+	return *lo_i <= *hi_i;
+}
+
+/* Native categorical label resampling:
+   - Thin/isotropic grids (np == 1, all axes L <= 1.5001): streaming 2x2x2
+     fixed-point (Q = 16384 = 2^14, exact int64 weights summing to 2^42)
+     trilinear one-hot label voting with nearest-neighbor tie-breaking and
+     exact foreground bounding-box row clipping. Zero extra volume memory,
+     zero -ffast-math / FMA tie ambiguity across compilers and JS, bit-exact
+     identity on cardinal integer-aligned grids, and eliminates oblique/sub-mm
+     Moire voxel teeth.
+   - Thick-slice grids (np > 1, any axis L > 1.5001): adaptive center-outward
+     midpoint-pair majority vote. Background votes too; ties retain the first
+     (centermost) probe. */
 static void label_reslice_rows(void *context, int z_low, int z_high) {
 	const reslice_slab *s = context;
 	int np = s->label_probes;
+	int out_x = s->out_dim[0], out_y = s->out_dim[1];
+	int nx = s->nx, ny = s->ny, nz = s->nz, nxy = s->nxy;
+	int nx1 = nx - 1, ny1 = ny - 1, nz1 = nz - 1;
+	const float *in = s->in;
+	if (np == 1) {
+		enum { Q = 16384 };
+		double lo_x = (double)(s->bbox[0] - 1), hi_x = (double)(s->bbox[1] + 1);
+		double lo_y = (double)(s->bbox[2] - 1), hi_y = (double)(s->bbox[3] + 1);
+		double lo_z = (double)(s->bbox[4] - 1), hi_z = (double)(s->bbox[5] + 1);
+		int empty_src = s->bbox[1] < s->bbox[0];
+		double ex0 = s->label_step[0][0], ex1 = s->label_step[0][1], ex2 = s->label_step[0][2];
+		for (int z = z_low; z <= z_high; z++)
+		for (int y = 0; y < out_y; y++) {
+			float *row = s->out + (size_t)y * (size_t)out_x + (size_t)z * s->out_xy;
+			if (empty_src) {
+				memset(row, 0, (size_t)out_x * sizeof(*row));
+				continue;
+			}
+			double bx0 = s->label_origin[0] + y * s->label_step[1][0] + z * s->label_step[2][0];
+			double by0 = s->label_origin[1] + y * s->label_step[1][1] + z * s->label_step[2][1];
+			double bz0 = s->label_origin[2] + y * s->label_step[1][2] + z * s->label_step[2][2];
+			int i0 = 0, i1 = out_x - 1;
+			if (!clip_row_axis(bx0, ex0, lo_x, hi_x, &i0, &i1) ||
+			    !clip_row_axis(by0, ex1, lo_y, hi_y, &i0, &i1) ||
+			    !clip_row_axis(bz0, ex2, lo_z, hi_z, &i0, &i1)) {
+				memset(row, 0, (size_t)out_x * sizeof(*row));
+				continue;
+			}
+			if (i0 > 0) memset(row, 0, (size_t)i0 * sizeof(*row));
+			if (i1 + 1 < out_x) memset(row + i1 + 1, 0, (size_t)(out_x - i1 - 1) * sizeof(*row));
+			for (int x = i0; x <= i1; x++) {
+				double bx = bx0 + (double)x * ex0;
+				double by = by0 + (double)x * ex1;
+				double bz = bz0 + (double)x * ex2;
+				double fx0 = floor(bx), fy0 = floor(by), fz0 = floor(bz);
+				if (fx0 < -1.0 || fy0 < -1.0 || fz0 < -1.0 ||
+				    fx0 >= (double)nx || fy0 >= (double)ny || fz0 >= (double)nz) {
+					row[x] = 0.0f;
+					continue;
+				}
+				int x0 = (int)fx0, y0 = (int)fy0, z0 = (int)fz0;
+				float l0, l1, l2, l3, l4, l5, l6, l7;
+				if (x0 >= 0 && x0 < nx1 && y0 >= 0 && y0 < ny1 && z0 >= 0 && z0 < nz1) {
+					size_t p = (size_t)x0 + (size_t)y0 * (size_t)nx + (size_t)z0 * (size_t)nxy;
+					l0 = in[p];             l1 = in[p + 1];
+					l2 = in[p + nx];        l3 = in[p + nx + 1];
+					l4 = in[p + nxy];       l5 = in[p + nxy + 1];
+					l6 = in[p + nxy + nx];  l7 = in[p + nxy + nx + 1];
+				} else {
+					l0 = label_sample_f(in, x0,   y0,   z0,   nx, ny, nz, nxy);
+					l1 = label_sample_f(in, x0+1, y0,   z0,   nx, ny, nz, nxy);
+					l2 = label_sample_f(in, x0,   y0+1, z0,   nx, ny, nz, nxy);
+					l3 = label_sample_f(in, x0+1, y0+1, z0,   nx, ny, nz, nxy);
+					l4 = label_sample_f(in, x0,   y0,   z0+1, nx, ny, nz, nxy);
+					l5 = label_sample_f(in, x0+1, y0,   z0+1, nx, ny, nz, nxy);
+					l6 = label_sample_f(in, x0,   y0+1, z0+1, nx, ny, nz, nxy);
+					l7 = label_sample_f(in, x0+1, y0+1, z0+1, nx, ny, nz, nxy);
+				}
+				if (l0 == l1 && l0 == l2 && l0 == l3 &&
+				    l0 == l4 && l0 == l5 && l0 == l6 && l0 == l7) {
+					row[x] = l0;
+					continue;
+				}
+				double fx = bx - fx0, fy = by - fy0, fz = bz - fz0;
+				int qx = (int)floor(fx * (double)Q + 0.5);
+				int qy = (int)floor(fy * (double)Q + 0.5);
+				int qz = (int)floor(fz * (double)Q + 0.5);
+				if (qx < 0) qx = 0; else if (qx > Q) qx = Q;
+				if (qy < 0) qy = 0; else if (qy > Q) qy = Q;
+				if (qz < 0) qz = 0; else if (qz > Q) qz = Q;
+				if ((qx | qy | qz) == 0) {
+					row[x] = l0;
+					continue;
+				}
+				int64_t ix0 = (int64_t)(Q - qx), iy0 = (int64_t)(Q - qy), iz0 = (int64_t)(Q - qz);
+				int64_t ix1 = (int64_t)qx,       iy1 = (int64_t)qy,       iz1 = (int64_t)qz;
+				int64_t w00 = ix0 * iy0, w10 = ix1 * iy0, w01 = ix0 * iy1, w11 = ix1 * iy1;
+				float ls[8] = { l0, l1, l2, l3, l4, l5, l6, l7 };
+				int64_t ws[8] = {
+					w00 * iz0, w10 * iz0, w01 * iz0, w11 * iz0,
+					w00 * iz1, w10 * iz1, w01 * iz1, w11 * iz1
+				};
+				int nn = (fx >= 0.5 ? 1 : 0) | (fy >= 0.5 ? 2 : 0) | (fz >= 0.5 ? 4 : 0);
+				float cl[8];
+				int64_t wt[8];
+				cl[0] = ls[nn];
+				wt[0] = ws[nn];
+				int nc = 1;
+				for (int t = 0; t < 8; t++) {
+					if (t == nn) continue;
+					int64_t w = ws[t];
+					if (w == 0) continue;
+					float c = ls[t];
+					int q = 0;
+					while (q < nc && cl[q] != c) q++;
+					if (q == nc) { cl[nc] = c; wt[nc] = w; nc++; }
+					else wt[q] += w;
+				}
+				int best = 0;
+				for (int q = 1; q < nc; q++) if (wt[q] > wt[best]) best = q;
+				row[x] = cl[best];
+			}
+		}
+		return;
+	}
 	for (int z = z_low; z <= z_high; z++)
-	for (int y = 0; y < s->out_dim[1]; y++) {
+	for (int y = 0; y < out_y; y++) {
 		double base[3];
 		for (int a = 0; a < 3; a++)
 			base[a] = s->label_origin[a] + y*s->label_step[1][a] + z*s->label_step[2][a];
-		if (np == 1) {
-			for (int x = 0; x < s->out_dim[0]; x++) {
-				double ix = floor(base[0] + 0.5);
-				double iy = floor(base[1] + 0.5);
-				double iz = floor(base[2] + 0.5);
-				float v = 0;
-				if (ix >= 0 && ix < s->nx && iy >= 0 && iy < s->ny && iz >= 0 && iz < s->nz)
-					v = s->in[(size_t)ix + (size_t)iy*s->nx + (size_t)iz*s->nxy];
-				s->out[(size_t)x + (size_t)y*s->out_dim[0] + (size_t)z*s->out_xy] = v;
-				for (int a = 0; a < 3; a++) base[a] += s->label_step[0][a];
-			}
-			continue;
-		}
-		for (int x = 0; x < s->out_dim[0]; x++) {
+		for (int x = 0; x < out_x; x++) {
 			float values[BC_LABEL_MAX_PROBES];
 			unsigned counts[BC_LABEL_MAX_PROBES];
 			int used = 0;
@@ -288,8 +414,8 @@ static void label_reslice_rows(void *context, int z_low, int z_high) {
 				double iy = floor(base[1] + s->label_delta[k][1] + 0.5);
 				double iz = floor(base[2] + s->label_delta[k][2] + 0.5);
 				float v = 0;
-				if (ix >= 0 && ix < s->nx && iy >= 0 && iy < s->ny && iz >= 0 && iz < s->nz)
-					v = s->in[(size_t)ix + (size_t)iy*s->nx + (size_t)iz*s->nxy];
+				if (ix >= 0 && ix < nx && iy >= 0 && iy < ny && iz >= 0 && iz < nz)
+					v = in[(size_t)ix + (size_t)iy*(size_t)nx + (size_t)iz*(size_t)nxy];
 				int q = 0;
 				while (q < used && values[q] != v) q++;
 				if (q == used) {
@@ -302,7 +428,7 @@ static void label_reslice_rows(void *context, int z_low, int z_high) {
 			}
 			int best = 0;
 			for (int q = 1; q < used; q++) if (counts[q] > counts[best]) best = q;
-			s->out[(size_t)x + (size_t)y*s->out_dim[0] + (size_t)z*s->out_xy] = values[best];
+			s->out[(size_t)x + (size_t)y*(size_t)out_x + (size_t)z*s->out_xy] = values[best];
 			for (int a = 0; a < 3; a++) base[a] += s->label_step[0][a];
 		}
 	}
@@ -353,7 +479,8 @@ static void reslice_rows(void *context, int z_low, int z_high) {
 }
 
 static int do_reslice(nifti_image *nim, const int out_dim[3], const float out_mm[3],
-                      mat44 out_affine, mat44 out_to_in, int linear) {
+                      mat44 out_affine, mat44 out_to_in, int linear,
+                      const nifti_dmat44 *dst_dmat) {
 	if (nim->datatype != DT_FLOAT32 || nim->nx < 1 || nim->ny < 1 || nim->nz < 1)
 		return 1;
 	size_t in_xy, in_n, out_xy, out_n;
@@ -406,18 +533,25 @@ static int do_reslice(nifti_image *nim, const int out_dim[3], const float out_mm
 		.nx = nx, .ny = ny, .nz = nz, .nxy = nxy,
 		.out_xy = out_xy, .linear = linear };
 	if (linear == BC_RESAMPLE_LABELS) {
-		mat44 inverse = nifti_mat44_inverse(dmat_to_mat(&nim->sto_xyz));
-		/* Probe origin and unit steps as upstream does, retaining its float32
-		   inverse and double coordinate arithmetic. Do not reuse the legacy
-		   float matrix product: cancellation at native boundaries can change votes. */
+		/* Exact double-precision inverse and coordinate steps matching
+		   js/src/webgpu/reslice-volume.js bit-for-bit. */
+		nifti_dmat44 inverse = nifti_dmat44_inverse(nim->sto_xyz);
+		nifti_dmat44 dst_aff;
+		if (dst_dmat) {
+			dst_aff = *dst_dmat;
+		} else {
+			for (int r = 0; r < 4; r++)
+				for (int c = 0; c < 4; c++)
+					dst_aff.m[r][c] = (double)out_affine.m[r][c];
+		}
 		for (int a = 0; a < 3; a++) {
 			double origin = inverse.m[a][3];
-			for (int b = 0; b < 3; b++) origin += (double)inverse.m[a][b] * out_affine.m[b][3];
+			for (int b = 0; b < 3; b++) origin += inverse.m[a][b] * dst_aff.m[b][3];
 			slab.label_origin[a] = origin;
 			for (int axis = 0; axis < 3; axis++) {
 				double point = inverse.m[a][3];
 				for (int b = 0; b < 3; b++)
-					point += (double)inverse.m[a][b] * ((double)out_affine.m[b][axis] + out_affine.m[b][3]);
+					point += inverse.m[a][b] * (dst_aff.m[b][axis] + dst_aff.m[b][3]);
 				slab.label_step[axis][a] = point - origin;
 			}
 		}
@@ -432,6 +566,37 @@ static int do_reslice(nifti_image *nim, const int out_dim[3], const float out_mm
 			for (int a = 0; a < 3; a++) slab.label_delta[k][a] =
 				ox[ix]*slab.label_step[0][a] + oy[iy]*slab.label_step[1][a] + oz[iz]*slab.label_step[2][a];
 		slab.label_probes = k;
+		if (k == 1) {
+			/* Compute tight bounding box of non-zero source labels for exact row clipping. */
+			int minX = nx, maxX = -1, minY = ny, maxY = -1, minZ = nz, maxZ = -1;
+			for (int sz = 0; sz < nz; sz++) {
+				int z_has = 0;
+				const float *z_ptr = in + (size_t)sz * (size_t)nxy;
+				for (int sy = 0; sy < ny; sy++) {
+					int y_has = 0;
+					const float *row = z_ptr + (size_t)sy * (size_t)nx;
+					for (int sx = 0; sx < nx; sx++) {
+						if (row[sx] != 0.0f) {
+							y_has = 1;
+							if (sx < minX) minX = sx;
+							if (sx > maxX) maxX = sx;
+						}
+					}
+					if (y_has) {
+						z_has = 1;
+						if (sy < minY) minY = sy;
+						if (sy > maxY) maxY = sy;
+					}
+				}
+				if (z_has) {
+					if (sz < minZ) minZ = sz;
+					if (sz > maxZ) maxZ = sz;
+				}
+			}
+			slab.bbox[0] = minX; slab.bbox[1] = maxX;
+			slab.bbox[2] = minY; slab.bbox[3] = maxY;
+			slab.bbox[4] = minZ; slab.bbox[5] = maxZ;
+		}
 		bc_parallel_for(0, out_dim[2] - 1, 0, label_reslice_rows, &slab);
 	} else bc_parallel_for(0, out_dim[2] - 1, 0, reslice_rows, &slab);
 	free(nim->data);
@@ -461,7 +626,7 @@ static int conform_reslice(nifti_image *nim, int ras) {
 	conform_xform(in_dim, in_affine, ras, &out_affine);
 	mat44 in_to_out = nifti_mat44_mul(nifti_mat44_inverse(out_affine), in_affine);
 	mat44 out_to_in = nifti_mat44_inverse(in_to_out);
-	return do_reslice(nim, out_dim, out_mm, out_affine, out_to_in, 1);
+	return do_reslice(nim, out_dim, out_mm, out_affine, out_to_in, 1, NULL);
 }
 
 int brainchopc_comply(nifti_image *nim) {
@@ -498,7 +663,7 @@ int brainchopc_reslice(nifti_image *source, const nifti_image *target, int linea
 	mat44 out_to_in=nifti_mat44_inverse(in_to_out);
 	int dim[3]={(int)target->nx,(int)target->ny,(int)target->nz};
 	float mm[3]={(float)target->dx,(float)target->dy,(float)target->dz};
-	int status=do_reslice(source,dim,mm,out_affine,out_to_in,linear);
+	int status=do_reslice(source,dim,mm,out_affine,out_to_in,linear,&target->sto_xyz);
 	if(!status) {
 		/* niimath's reference-grid reslice preserves the target header's stored
 		   voxel sizes instead of round-tripping them through the affine. */

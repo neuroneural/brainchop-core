@@ -34,7 +34,7 @@ bc_src="$bc_root/src"
 # Default from src/version.h, which owns the string; an explicit argument still
 # wins, so a one-off build can be labelled without editing the header.
 bc_default_version=$(sed -n 's/^#define BC_VERSION "\(.*\)"/\1/p' "$bc_root/src/version.h")
-bc_version=${1:-${bc_default_version:-1.1.3}}
+bc_version=${1:-${bc_default_version:-1.1.4}}
 bc_identity=${MACOS_SIGN_IDENTITY:--}
 bc_installer_identity=${MACOS_INSTALLER_IDENTITY:-}
 bc_target=${MACOSX_DEPLOYMENT_TARGET:-13.2}

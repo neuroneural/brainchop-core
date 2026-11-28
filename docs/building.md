@@ -69,9 +69,9 @@ back to the 4.0 GB fp16 engine). In the browser, `segmentTissues` on `t1_crop`
 takes ~2.75 s on WebGPU, 5.8 s on WebGL2 and 12.5 s on wasm CPU (Chrome).
 
 `--version` (or `-v`) prints just the version, e.g.
-`brainchop-mindgrab 1.1.3`. Any of the four with no arguments, or with
+`brainchop-mindgrab 1.1.4`. Any of the four with no arguments, or with
 `--help`, also prints it on the description line — `BrainChop mindgrab: skull stripping in any modality
-(v1.1.3)`. Every run also prints it beside the backend it selected, which
+(v1.1.4)`. Every run also prints it beside the backend it selected, which
 is the line to quote in a bug report.
 
 Common to all four:
@@ -557,9 +557,9 @@ the local legacy compiler does not change the shipped module compatibility.
 ### Linux and Windows release archives
 
 ```sh
-make -C src native-package VERSION=1.1.3
+make -C src native-package VERSION=1.1.4
 # Include older x86 CPUs:
-make -C src native-package VERSION=1.1.3 X86_ISA=
+make -C src native-package VERSION=1.1.4 X86_ISA=
 ```
 
 Packaging includes the `CUDA_MODELS` executables — every model with a fatbin,

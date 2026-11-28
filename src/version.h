@@ -20,6 +20,6 @@
  * differ, and this project's whole test strategy is byte-identical output from
  * byte-identical input.
  */
-#define BC_VERSION "1.1.3"
+#define BC_VERSION "1.1.4"
 
 #endif

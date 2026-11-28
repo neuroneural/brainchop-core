@@ -2088,7 +2088,7 @@ asan: clean
 	@echo "asan builds ready as ./$(exe_mindgrab) and ./$(exe_model16chan18cls);"
 	@echo "run 'make clean' before a normal build"
 
-VERSION ?= 1.1.3
+VERSION ?= 1.1.4
 MACOS_SIGN_IDENTITY ?=
 MACOS_INSTALLER_IDENTITY ?=
 NOTARY_PROFILE ?= brainchopc-notary

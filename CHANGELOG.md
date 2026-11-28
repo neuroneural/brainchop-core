@@ -2,7 +2,12 @@
 
 All notable changes to BrainChop Core are documented in this file.
 
-## [Unreleased]
+## [1.1.4] - 2026-11-27
+
+Replaces nearest-neighbor native label reslicing on thin/isotropic grids with streaming 2×2×2 fixed-point trilinear one-hot label voting (eliminating cortical Moiré terraces and 1-voxel spikes on oblique scans with zero extra volume RAM) and accelerates ARM64 CPU Turbo via whole-row SME convolutions and NEON double-precision block moments.
+
+### Native Label Reslicing (`C` & `@brainchop/core`)
+- **Streaming 2×2×2 Trilinear One-Hot Label Voting (`#8`):** Replaced the single-tap nearest-neighbor path (`L <= 1.5001 mm`) in both `src/conform.c` and `js/src/webgpu/reslice-volume.js` with exact fixed-point (`Q = 16384 = 2^14`, integer weights summing to `2^42`) trilinear one-hot label voting, deterministic nearest-neighbor tie-breaking, uniform-8-corner fast path, double-precision affine inversion, and analytic foreground bounding-box row clipping. Eliminates oblique cortical surface spikes (`+1.9–2.1%` Macro Dice, `+2.2–2.3%` Cortex Dice, `+4.8–5.3%` Worst-Class Dice on continuous 0.5 mm ground-truth benchmarks) at `O(1)` extra RAM while preserving bit-exact C↔JS parity (199/199 oracle cases and 0/105M real oblique MRI voxel diffs) and keeping thick-slice midpoint majority voting (`L > 1.5001 mm`) unchanged.
 
 ### Performance & Memory Upgrades
 - **ARM CPU Turbo (Apple SME & NEON):** SME hidden convolutions run whole rows with predicated edge taps instead of partially filled edge blocks, and the turbo row epilogue is vectorized in NEON with `double` (`float64x2_t`) 64-voxel block moments. Apple M4 Pro end-to-end: **1.27×** `mindmap`, **1.57×** `mindmap-fast`, **1.29×** `mindsnap`, **1.18×** int8 NEON (and **1.20–1.26×** int8 SDOT on Apple M1). Preserves bit-exact turbo and `--no-turbo` outputs.

@@ -1523,9 +1523,9 @@ endif
 	$(MAKE) test-mindgrab-encoding
 	$(MAKE) test-label-cleanup
 	$(MAKE) test-label-quality
-	@if [ -f "$(BC_BRAINCHOP_TEST)/main.js" ] && command -v node >/dev/null 2>&1; then \
+	@if command -v node >/dev/null 2>&1; then \
 		$(MAKE) test-label-resample; \
-	else echo "test-label-resample: browser oracle SKIPPED (requires node and BC_BRAINCHOP_TEST/main.js)"; fi
+	else echo "test-label-resample: JS oracle SKIPPED (requires node)"; fi
 	$(MAKE) test-cat-lite
 
 .PHONY: test-cpu-sme
@@ -1689,7 +1689,7 @@ label-resample-check: models | $(BC_TMP)
 	$(call bc_link_model,mindmap,../test/label_resample_check.c) \
 		-o $(BC_TMP)/label-resample-check$(EXEEXT)
 test-label-resample: label-resample-check
-	node ../test/label_resample_check.mjs $(BC_TMP)/label-resample-check$(EXEEXT) $(BC_BRAINCHOP_TEST)
+	node ../test/label_resample_check.mjs $(BC_TMP)/label-resample-check$(EXEEXT) ../js/src/webgpu
 
 # Exit-code contracts. These are the paths where a silent success is worst:
 # a mistyped invocation that does nothing, or an unusable image that produces a

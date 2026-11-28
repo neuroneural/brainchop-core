@@ -894,3 +894,220 @@ test('Stage 2: fused constant/all-NaN guard, reusable bwlabels scratch, persiste
     }
   }
 })
+
+// ---------------------------------------------------------------------------
+// 7. Streaming 2x2x2 trilinear label reslicing: oblique smoothness, accuracy,
+//    cardinal exactness, LUT edge cases, and zero extra volume memory
+// ---------------------------------------------------------------------------
+test('streaming 2x2x2 trilinear label reslicing eliminates oblique Moire spikes and improves accuracy', () => {
+  const surfaceSpikes = (vol, dims, pred) => {
+    const [nx, ny, nz] = dims
+    const nxy = nx * ny
+    let vCount = 0
+    let ns = 0
+    let sp4 = 0
+    let sp5 = 0
+    for (let z = 0; z < nz; z++) {
+      const zOff = z * nxy
+      for (let y = 0; y < ny; y++) {
+        const yOff = zOff + y * nx
+        for (let x = 0; x < nx; x++) {
+          const i = yOff + x
+          if (!pred(vol[i])) continue
+          vCount++
+          let nb = 0
+          if (x > 0 && pred(vol[i - 1])) nb++
+          if (x + 1 < nx && pred(vol[i + 1])) nb++
+          if (y > 0 && pred(vol[i - nx])) nb++
+          if (y + 1 < ny && pred(vol[i + nx])) nb++
+          if (z > 0 && pred(vol[i - nxy])) nb++
+          if (z + 1 < nz && pred(vol[i + nxy])) nb++
+          if (nb < 6) {
+            ns++
+            if (nb <= 2) sp4++
+            if (nb <= 1) sp5++
+          }
+        }
+      }
+    }
+    return { V: vCount, sp4Pct: (100 * sp4) / Math.max(1, ns), sp5Pct: (100 * sp5) / Math.max(1, ns) }
+  }
+
+  // Helper: 3D rotation affine around unit axis (1, 1, 0.5) centered on volume center
+  const makeObliqueAffine = (baseAff, baseDims, dstDims, deg, voxSize = 1.0) => {
+    const ang = (deg * Math.PI) / 180
+    const len = Math.hypot(1, 1, 0.5)
+    const ux = 1 / len, uy = 1 / len, uz = 0.5 / len
+    const c = Math.cos(ang), s = Math.sin(ang), omc = 1 - c
+    const R = [
+      [c + ux * ux * omc, ux * uy * omc - uz * s, ux * uz * omc + uy * s],
+      [uy * ux * omc + uz * s, c + uy * uy * omc, uy * uz * omc - ux * s],
+      [uz * ux * omc - uy * s, uz * uy * omc + ux * s, c + uz * uz * omc],
+    ]
+    const cx = baseAff[0][0] * (baseDims[0] / 2) + baseAff[0][1] * (baseDims[1] / 2) + baseAff[0][2] * (baseDims[2] / 2) + baseAff[0][3]
+    const cy = baseAff[1][0] * (baseDims[0] / 2) + baseAff[1][1] * (baseDims[1] / 2) + baseAff[1][2] * (baseDims[2] / 2) + baseAff[1][3]
+    const cz = baseAff[2][0] * (baseDims[0] / 2) + baseAff[2][1] * (baseDims[1] / 2) + baseAff[2][2] * (baseDims[2] / 2) + baseAff[2][3]
+    const A = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1]]
+    for (let r = 0; r < 3; r++) {
+      for (let k = 0; k < 3; k++) {
+        A[r][k] = (R[r][0] * baseAff[0][k] + R[r][1] * baseAff[1][k] + R[r][2] * baseAff[2][k]) * voxSize
+      }
+      const ctr = r === 0 ? cx : r === 1 ? cy : cz
+      A[r][3] = ctr - (A[r][0] * (dstDims[0] / 2) + A[r][1] * (dstDims[1] / 2) + A[r][2] * (dstDims[2] / 2))
+    }
+    return A
+  }
+
+  // 1. Cardinal integer-aligned 1x1x1mm non-256^3 slice matches NN bit-for-bit
+  const lbl24 = readNifti1(gunzipSync(readFileSync(join(repoRoot, 'test', 'labels24.nii.gz'))))
+  const srcAff = flatToNested4x4(lbl24.header.stoXyz)
+  const srcDims = lbl24.header.dims.slice(1, 4)
+  {
+    const subDims = [192, 256, 256]
+    const cardAff = makeObliqueAffine(srcAff, srcDims, subDims, 0, 1.0)
+    const resCard = resliceVolumeData({
+      srcImg: lbl24.data,
+      srcDims,
+      srcAffine: srcAff,
+      dstDims: subDims,
+      dstAffine: cardAff,
+      isLabel: true,
+      labelOutputType: 'uint8',
+    }).img
+    // Direct integer slice x + 32
+    let diffs = 0
+    for (let z = 0; z < 256; z++) {
+      for (let y = 0; y < 256; y++) {
+        const dstOff = y * 192 + z * 192 * 256
+        const srcOff = 32 + y * 256 + z * 65536
+        for (let x = 0; x < 192; x++) {
+          if (resCard[dstOff + x] !== lbl24.data[srcOff + x]) diffs++
+        }
+      }
+    }
+    assert.equal(diffs, 0, 'cardinal integer-aligned 1 mm non-256^3 reslice must be bit-exact')
+  }
+
+  // 2. Real 18-class MindMap & 104-class MindSnap oblique 1x1x1mm (10 deg, 192x256x256):
+  //    eliminates NN Moire teeth (NN produces sp4 ~3.8%, sp5 ~0.54%), preserves volume (< 0.5%)
+  const rotDims = [192, 256, 256]
+  const rotAff = makeObliqueAffine(srcAff, srcDims, rotDims, 10.0, 1.0)
+  const isPial18 = (v) => v === 1 || v === 2
+  const confStats18 = surfaceSpikes(lbl24.data, srcDims, isPial18)
+  const abBefore = process.memoryUsage().arrayBuffers
+  const res18 = resliceVolumeData({
+    srcImg: lbl24.data,
+    srcDims,
+    srcAffine: srcAff,
+    dstDims: rotDims,
+    dstAffine: rotAff,
+    isLabel: true,
+    labelOutputType: 'uint8',
+  }).img
+  const abDelta = process.memoryUsage().arrayBuffers - abBefore
+  const rotStats18 = surfaceSpikes(res18, rotDims, isPial18)
+  assert.ok(rotStats18.sp4Pct < 2.4, `18-class oblique sp4 must stay < 2.4% (got ${rotStats18.sp4Pct.toFixed(2)}%)`)
+  assert.ok(rotStats18.sp5Pct < 0.28, `18-class oblique sp5 must stay < 0.28% (got ${rotStats18.sp5Pct.toFixed(2)}%)`)
+  const volDriftPct = Math.abs(rotStats18.V - confStats18.V) * 100 / confStats18.V
+  assert.ok(volDriftPct < 0.5, `18-class oblique pial volume drift must stay < 0.5% (got ${volDriftPct.toFixed(3)}%)`)
+  assert.ok(
+    abDelta < res18.byteLength + 2 * 1024 * 1024,
+    `label reslice must use O(1) extra buffer memory (arrayBuffers delta=${abDelta}, out=${res18.byteLength})`,
+  )
+
+  const lbl104 = readNifti1(gunzipSync(readFileSync(join(repoRoot, 'test', 'labels104.nii.gz'))))
+  const res104 = resliceVolumeData({
+    srcImg: lbl104.data,
+    srcDims: lbl104.header.dims.slice(1, 4),
+    srcAffine: flatToNested4x4(lbl104.header.stoXyz),
+    dstDims: rotDims,
+    dstAffine: rotAff,
+    isLabel: true,
+    labelOutputType: 'uint8',
+  }).img
+  const rotStats104 = surfaceSpikes(res104, rotDims, (v) => v > 0)
+  assert.ok(rotStats104.sp4Pct < 2.4, `104-class oblique sp4 must stay < 2.4% (got ${rotStats104.sp4Pct.toFixed(2)}%)`)
+  assert.ok(rotStats104.sp5Pct < 0.25, `104-class oblique sp5 must stay < 0.25% (got ${rotStats104.sp5Pct.toFixed(2)}%)`)
+
+  // 3. Analytical folded cortical shell phantom: continuous truth evaluated directly on
+  //    conformed 1 mm vs oblique 10 deg 1 mm grid; trilinear voting must strictly beat NN
+  //    on both Dice and 1-voxel surface spike rate.
+  const pDims = [64, 64, 64]
+  const idAff = [[1, 0, 0, -32], [0, 1, 0, -32], [0, 0, 1, -32], [0, 0, 0, 1]]
+  const evalPhantom = (x, y, z) => {
+    const r = Math.hypot(x, y, z)
+    const fold = 2.6 * Math.sin(0.32 * x) * Math.cos(0.32 * y) + 1.8 * Math.sin(0.28 * z)
+    const rEff = r + fold
+    if (rEff < 15.5) return 1 // white matter
+    if (rEff < 19.0) return 2 // 3.5 mm cortical ribbon
+    return 0
+  }
+  const confPh = new Uint8Array(64 * 64 * 64)
+  for (let z = 0; z < 64; z++)
+    for (let y = 0; y < 64; y++)
+      for (let x = 0; x < 64; x++)
+        confPh[x + y * 64 + z * 4096] = evalPhantom(x - 32, y - 32, z - 32)
+  const oblPhAff = makeObliqueAffine(idAff, pDims, pDims, 12.0, 1.0)
+  const gtObl = new Uint8Array(64 * 64 * 64)
+  const nnObl = new Uint8Array(64 * 64 * 64)
+  const invId = invertAffine4x4(idAff)
+  for (let z = 0; z < 64; z++) {
+    for (let y = 0; y < 64; y++) {
+      for (let x = 0; x < 64; x++) {
+        const mx = oblPhAff[0][0] * x + oblPhAff[0][1] * y + oblPhAff[0][2] * z + oblPhAff[0][3]
+        const my = oblPhAff[1][0] * x + oblPhAff[1][1] * y + oblPhAff[1][2] * z + oblPhAff[1][3]
+        const mz = oblPhAff[2][0] * x + oblPhAff[2][1] * y + oblPhAff[2][2] * z + oblPhAff[2][3]
+        const idx = x + y * 64 + z * 4096
+        gtObl[idx] = evalPhantom(mx, my, mz)
+        const sx = Math.floor(invId[0] * mx + invId[1] * my + invId[2] * mz + invId[3] + 0.5)
+        const sy = Math.floor(invId[4] * mx + invId[5] * my + invId[6] * mz + invId[7] + 0.5)
+        const sz = Math.floor(invId[8] * mx + invId[9] * my + invId[10] * mz + invId[11] + 0.5)
+        nnObl[idx] = (sx >= 0 && sx < 64 && sy >= 0 && sy < 64 && sz >= 0 && sz < 64) ? confPh[sx + sy * 64 + sz * 4096] : 0
+      }
+    }
+  }
+  const triObl = resliceVolumeData({
+    srcImg: confPh,
+    srcDims: pDims,
+    srcAffine: idAff,
+    dstDims: pDims,
+    dstAffine: oblPhAff,
+    isLabel: true,
+    labelOutputType: 'uint8',
+  }).img
+  const diceCls = (a, b, cls) => {
+    let inter = 0, sa = 0, sb = 0
+    for (let i = 0; i < a.length; i++) {
+      const ma = a[i] === cls, mb = b[i] === cls
+      if (ma) sa++; if (mb) sb++; if (ma && mb) inter++
+    }
+    return (2 * inter) / (sa + sb)
+  }
+  const nnCtxDice = diceCls(gtObl, nnObl, 2)
+  const triCtxDice = diceCls(gtObl, triObl, 2)
+  const nnSp = surfaceSpikes(nnObl, pDims, isPial18)
+  const triSp = surfaceSpikes(triObl, pDims, isPial18)
+  assert.ok(
+    triCtxDice > nnCtxDice + 0.015,
+    `trilinear must improve oblique cortical Dice by >1.5% (tri=${triCtxDice.toFixed(4)} vs nn=${nnCtxDice.toFixed(4)})`,
+  )
+  assert.ok(
+    triSp.sp4Pct < nnSp.sp4Pct * 0.65,
+    `trilinear must slash oblique 1-voxel teeth (tri=${triSp.sp4Pct.toFixed(2)}% vs nn=${nnSp.sp4Pct.toFixed(2)}%)`,
+  )
+
+  // 4. Non-zero labelLut[0] background mapping + empty all-zero source
+  const nonZeroLut = new Int16Array([77, 1001, 2002])
+  const emptySrc = new Uint8Array(4 * 4 * 4)
+  const resEmpty = resliceVolumeData({
+    srcImg: emptySrc,
+    srcDims: [4, 4, 4],
+    srcAffine: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+    dstDims: [4, 4, 4],
+    dstAffine: [[1, 0, 0, 0.25], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+    isLabel: true,
+    labelLut: nonZeroLut,
+  })
+  assert.equal(resEmpty.hdrPatch.cal_max, 77)
+  assert.ok(resEmpty.img.every((v) => v === 77), 'non-zero labelLut[0] must fill skipped background voxels')
+})

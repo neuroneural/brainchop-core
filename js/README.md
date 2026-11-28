@@ -44,8 +44,10 @@ ready for viewers such as NiiVue.
 `mindmap`, `mindmap-fast`, and `mindsnap` apply class-aware connected-component
 cleanup with neighboring-label refill by default. Pass `{ legacyCleanup: true }`
 for the original whole-brain-only 26-connected cleanup. Categorical outputs
-reslice to the native input grid via midpoint majority voting; masks use
-nearest-neighbor resampling; continuous tissue maps use trilinear resampling.
+reslice to the native input grid via streaming 2x2x2 trilinear one-hot label
+voting on isotropic and sub-millimeter grids (`<= 1.5 mm` step) and midpoint
+majority voting on thick slices; masks use nearest-neighbor resampling;
+continuous tissue maps use trilinear resampling.
 Invalid, empty, or severely fragmented categorical outputs fail explicitly with
 `inference-failed`.
 
